@@ -1,1 +1,11 @@
 .env
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+backend/uploads/*
+!backend/uploads/.gitkeep
