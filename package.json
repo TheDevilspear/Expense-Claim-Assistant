@@ -1,0 +1,12 @@
+{
+  "name": "expense-claim-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Expense Claim Assistant with React frontend and Express/Multer backend",
+  "scripts": {
+    "frontend": "npm run dev --prefix frontend",
+    "backend": "npm start --prefix backend",
+    "backend:dev": "npm run dev --prefix backend",
+    "install:all": "npm install --prefix frontend && npm install --prefix backend"
+  }
+}
