@@ -72,6 +72,10 @@ def arbitrate(
         logger.debug("OpenRouter API key not configured; skipping vision arbitration.")
         return None
 
+    model = config.get_vision_model()
+    base_url = config.get_base_url()
+    timeout = config.get_timeout()
+
     # Normalize endpoint URL
     clean_base = base_url.strip().rstrip("/")
     if clean_base.endswith("/chat/completions"):
