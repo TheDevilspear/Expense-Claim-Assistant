@@ -30,6 +30,10 @@ try:
         requires_human_action: bool
         timestamp: str
 
+        @property
+        def reimbursable_amount_inr(self) -> Optional[float]:
+            return self.approved_amount_inr
+
     class AuditTrailRecord(BaseModel):
         claim_id: str
         decision: ApproverDecision
@@ -51,6 +55,10 @@ except ImportError:
         timestamp: str
         approved_amount_inr: Optional[float] = None
         escalation_tags: List[str] = field(default_factory=list)
+
+        @property
+        def reimbursable_amount_inr(self) -> Optional[float]:
+            return self.approved_amount_inr
 
         def model_dump(self) -> Dict[str, Any]:
             def _conv(obj):
