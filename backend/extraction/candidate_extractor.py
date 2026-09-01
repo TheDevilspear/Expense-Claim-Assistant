@@ -9,6 +9,7 @@ semantic_classifier.py and field_selector.py.
 """
 
 import re
+from datetime import datetime
 from typing import List
 from models.extraction_schema import (
     Token,
@@ -82,6 +83,28 @@ def extract_money_candidates(evidence: PageEvidence) -> List[Candidate]:
                 x0=bbox[0], y0=bbox[1], x1=bbox[2], y1=bbox[3],
                 evidence_sources=[f"{evidence.extraction_method.value}_line_match"],
             ))
+
+    # Fallback to scanning raw_text lines if no line structures were found
+    if not candidates and evidence.raw_text:
+        for raw_line in evidence.raw_text.splitlines():
+            for match in _MONEY_PATTERN.finditer(raw_line):
+                try:
+                    value = float(match.group(1).replace(",", ""))
+                except ValueError:
+                    continue
+                if value < _MONEY_MIN or value > _MONEY_MAX:
+                    continue
+                match_start = match.start()
+                label = raw_line[:match_start].strip()
+                candidates.append(Candidate(
+                    field_type=FieldType.MONEY,
+                    value=value,
+                    raw_text=match.group(0).strip(),
+                    label=label,
+                    page=evidence.page_number,
+                    confidence=0.85,
+                    evidence_sources=["raw_text_regex"],
+                ))
 
     return candidates
 

@@ -43,6 +43,7 @@ from extraction import field_selector
 from extraction import vision_arbitrator
 from extraction.page_extractor import cluster_tokens_into_lines
 from extraction.constants import (
+    VENDOR_PATTERNS,
     KNOWN_TELECOM_VENDOR_TOKENS,
     COMMON_PREPAID_RECHARGE_AMOUNTS,
     IR_KEYWORDS,
