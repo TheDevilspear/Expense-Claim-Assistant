@@ -321,6 +321,10 @@ class CheckerAgent:
                         is_blocking=True,
                     )
                 elif end_diff > tolerance:
+                    if inv_validity is not None and isinstance(inv_validity, int) and abs(claimed_validity - inv_validity) > tolerance:
+                        reason_msg = f"Validity Period Mismatch: Claimed validity ({claimed_validity} days) differs from invoice plan validity ({inv_validity} days). Claimed end date ({claimed_end}) differs from invoice period end ({inv_end}) by {end_diff} days (tolerance: {tolerance} days)."
+                    else:
+                        reason_msg = f"Date Mismatch: Claimed end date ({claimed_end}) differs from invoice period end ({inv_end}) by {end_diff} days (tolerance: {tolerance} days)."
                     self._add_check(
                         checks,
                         check_id="BILLING_PERIOD_MATCH",
@@ -329,7 +333,7 @@ class CheckerAgent:
                         confidence=extracted.billing_end_date.confidence or extracted.billing_start_date.confidence,
                         claimed_value=f"{claimed_start} to {claimed_end}",
                         extracted_value=f"{inv_start} to {inv_end}",
-                        reason=f"Date Mismatch: Claimed end date ({claimed_end}) differs from invoice period end ({inv_end}) by {end_diff} days (tolerance: {tolerance} days).",
+                        reason=reason_msg,
                         is_blocking=True,
                     )
                 else:

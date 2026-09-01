@@ -128,9 +128,11 @@ _DATE_PATTERNS = [
     re.compile(r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{4}|\d{2})(?!\s*:)\b'),
 ]
 
+_DATE_TOKEN_REGEX = rf'(?:\d{{1,2}}[-/\s]{_MONTH_NAMES}[-/\s]\d{{2,4}}|\d{{4}}[-/\.]\d{{1,2}}[-/\.]\d{{1,2}}|\d{{1,2}}[-/\.]\d{{1,2}}[-/\.]\d{{2,4}}|{_MONTH_NAMES}\s+\d{{1,2}}(?:st|nd|rd|th)?,?\s+\d{{2,4}})'
+
 _DATE_RANGE_REGEX = re.compile(
     rf'(?:Statement\s+Period|Bill\s+Period|Billing\s+Period|Billing\s+Cycle(?:\s+Date)?|Usage\s+Period|Service\s+Period|Period(?:\s+Date)?|Plan\s+Period|Validity\s+Period)[:\s]*'
-    rf'([0-9A-Za-z\s\-/\.]{{6,25}})\s*(?:to|-|till|through|–)\s*([0-9A-Za-z\s\-/\.]{{6,25}})',
+    rf'({_DATE_TOKEN_REGEX})\s*(?:to|\-|till|through|–|\s+to\s+)\s*({_DATE_TOKEN_REGEX})',
     re.I
 )
 
@@ -254,7 +256,9 @@ def extract_date_candidates(evidence: PageEvidence) -> List[Candidate]:
                 # Semantic type heuristics from label
                 sem_type = DateSemanticType.OTHER_DATE
                 label_lower = label.lower()
-                if any(kw in label_lower for kw in ["bill date", "invoice date", "statement date", "date of invoice", "billing date"]):
+                if any(kw in label_lower for kw in ["due date current plan", "current plan expiry", "plan valid till", "plan validity till", "plan expiry", "plan expiration", "subscription end"]):
+                    sem_type = DateSemanticType.PLAN_EXPIRY_DATE
+                elif any(kw in label_lower for kw in ["bill date", "invoice date", "statement date", "date of invoice", "billing date", "date of issue", "issue date"]):
                     sem_type = DateSemanticType.BILL_DATE
                 elif any(kw in label_lower for kw in ["due date", "pay by", "payable by", "due on"]):
                     sem_type = DateSemanticType.DUE_DATE
@@ -264,6 +268,8 @@ def extract_date_candidates(evidence: PageEvidence) -> List[Candidate]:
                     sem_type = DateSemanticType.BILLING_PERIOD_START
                 elif any(kw in label_lower for kw in ["activation date", "activated on"]):
                     sem_type = DateSemanticType.ACTIVATION_DATE
+                elif any(kw in label_lower for kw in ["renewal date", "next renewal"]):
+                    sem_type = DateSemanticType.RENEWAL_DATE
 
                 bbox = _estimate_bbox_from_match(line, match)
 

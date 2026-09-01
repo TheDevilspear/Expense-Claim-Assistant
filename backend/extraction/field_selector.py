@@ -95,45 +95,168 @@ def select_billing_dates(
     candidates: List[Candidate],
 ) -> Tuple[Optional[Candidate], Optional[Candidate], Optional[Candidate]]:
     """
-    Selects bill_date, billing_start_date, and billing_end_date.
-    Returns (bill_date, start_date, end_date).
+    Selects (bill_date, billing_start_date, billing_end_date) using a 4-layer smart date engine:
+    1. Lock Anchor Date (T_bill: Bill Date / Statement Date / Invoice Date / Payment Date).
+    2. Collect explicit period ranges and candidate date pairs.
+    3. Filter out past activations and future plan expirations (> T_bill + 60 days).
+    4. Score all candidate pairs (D_start, D_end) based on duration plausibility and proximity to T_bill.
+    5. Fallback for single-date prepaid recharges with validity days computation.
     """
     from datetime import datetime, timedelta
-    date_candidates = [c for c in candidates if c.field_type == FieldType.DATE]
+    date_candidates = [c for c in candidates if c.field_type == FieldType.DATE and c.value]
     if not date_candidates:
         return None, None, None
 
-    start_date = _find_by_semantic([DateSemanticType.BILLING_PERIOD_START], date_candidates)
-    end_date = _find_by_semantic([DateSemanticType.BILLING_PERIOD_END], date_candidates)
-    bill_date = _find_by_semantic([DateSemanticType.BILL_DATE], date_candidates)
-    payment_date = _find_by_semantic([DateSemanticType.PAYMENT_DATE], date_candidates)
+    # Step 1: Lock Anchor Date (T_bill)
+    bill_date_c = _find_by_semantic([DateSemanticType.BILL_DATE, DateSemanticType.INVOICE_DATE], date_candidates)
+    payment_date_c = _find_by_semantic([DateSemanticType.PAYMENT_DATE, DateSemanticType.TRANSACTION_TIMESTAMP], date_candidates)
+    
+    anchor_c = bill_date_c or payment_date_c
+    anchor_dt = None
+    if anchor_c and anchor_c.value:
+        try:
+            anchor_dt = datetime.strptime(str(anchor_c.value), "%Y-%m-%d")
+        except Exception:
+            anchor_dt = None
 
-    # If we have a billing period start but only found start, try to find end
-    # by looking for dates with "to" or "-" in the label context
-    if start_date and not end_date:
+    # If no explicit bill/payment label, choose latest non-future date as anchor
+    if not anchor_dt:
+        plausible_dates = []
         for c in date_candidates:
-            if c == start_date or c.semantic_type in (DateSemanticType.DUE_DATE, DateSemanticType.ACTIVATION_DATE):
-                continue
-            if "to" in c.label.lower() or "-" in c.label:
-                end_date = c
-                end_date.semantic_type = DateSemanticType.BILLING_PERIOD_END
-                break
+            if c.semantic_type not in (DateSemanticType.PLAN_EXPIRY_DATE, DateSemanticType.RENEWAL_DATE, DateSemanticType.DUE_DATE):
+                try:
+                    dt = datetime.strptime(str(c.value), "%Y-%m-%d")
+                    plausible_dates.append((dt, c))
+                except Exception:
+                    pass
+        if plausible_dates:
+            plausible_dates.sort(key=lambda x: x[0])
+            anchor_dt, anchor_c = plausible_dates[-1]
 
-    # If start_date is known but end_date is missing, check if an explicit validity candidate exists
-    if start_date and not end_date and start_date.value:
+    # Step 2: Form candidate pairs (c_start, c_end)
+    candidate_pairs: List[Tuple[Candidate, Candidate, float]] = []  # (start, end, score)
+
+    # 2a. Check explicit range matches from candidate extractor (highest confidence)
+    range_starts = [c for c in date_candidates if c.semantic_type == DateSemanticType.BILLING_PERIOD_START]
+    range_ends = [c for c in date_candidates if c.semantic_type == DateSemanticType.BILLING_PERIOD_END]
+
+    for s in range_starts:
+        for e in range_ends:
+            if str(s.value) < str(e.value):
+                candidate_pairs.append((s, e, 150.0))
+
+    # 2b. Form all plausible pairs from non-excluded dates
+    eligible_dates = [
+        c for c in date_candidates
+        if c.semantic_type not in (
+            DateSemanticType.ACTIVATION_DATE,
+            DateSemanticType.PLAN_EXPIRY_DATE,
+            DateSemanticType.RENEWAL_DATE,
+        )
+    ]
+
+    for i in range(len(eligible_dates)):
+        for j in range(len(eligible_dates)):
+            if i != j:
+                s = eligible_dates[i]
+                e = eligible_dates[j]
+                if str(s.value) < str(e.value):
+                    candidate_pairs.append((s, e, 0.0))
+
+    # Step 3: Score candidate pairs based on cycle duration and temporal anchoring
+    scored_pairs = []
+    seen_pair_keys = set()
+
+    for s, e, initial_score in candidate_pairs:
+        key = (str(s.value), str(e.value))
+        if key in seen_pair_keys:
+            continue
+        seen_pair_keys.add(key)
+
+        try:
+            d_start = datetime.strptime(str(s.value), "%Y-%m-%d")
+            d_end = datetime.strptime(str(e.value), "%Y-%m-%d")
+            delta_days = (d_end - d_start).days + 1
+        except Exception:
+            continue
+
+        score = initial_score + (s.confidence + e.confidence) * 15.0
+
+        # Bonus for explicit semantic classification
+        if s.semantic_type == DateSemanticType.BILLING_PERIOD_START:
+            score += 40.0
+        if e.semantic_type == DateSemanticType.BILLING_PERIOD_END:
+            score += 40.0
+        if any("range_match" in src for src in s.evidence_sources + e.evidence_sources):
+            score += 50.0
+
+        # Duration Plausibility Brackets
+        if 25 <= delta_days <= 34:
+            score += 80.0  # Standard 1-month billing cycle
+        elif 55 <= delta_days <= 65:
+            score += 50.0  # 2-month billing cycle
+        elif 80 <= delta_days <= 95:
+            score += 60.0  # 3-month / 84-day cycle
+        elif 175 <= delta_days <= 190:
+            score += 40.0  # 6-month cycle
+        elif 355 <= delta_days <= 370:
+            score += 30.0  # 1-year annual cycle
+        elif delta_days < 7:
+            score -= 120.0  # Not a billing cycle (just invoice issue vs payment date)
+        elif 100 <= delta_days < 350:
+            score -= 80.0   # Atypical multi-month gap
+        elif delta_days > 370:
+            score -= 200.0  # Distant future plan expiration (e.g. 2025/2026)
+
+        # Proximity to Anchor Date (T_bill)
+        if anchor_dt:
+            # End date should be close to or slightly before the bill/statement date
+            diff_end_anchor = (d_end - anchor_dt).days
+            if -35 <= diff_end_anchor <= 5:
+                score += 40.0
+            elif diff_end_anchor > 60:
+                score -= 250.0  # Future plan expiry date, not this month's statement!
+
+            diff_start_anchor = (d_start - anchor_dt).days
+            if -45 <= diff_start_anchor <= 0:
+                score += 30.0
+            elif diff_start_anchor < -400:
+                score -= 100.0  # Old past registration date
+
+        scored_pairs.append((score, s, e))
+
+    # Step 4: Pick best scoring pair if above threshold
+    best_start = None
+    best_end = None
+
+    if scored_pairs:
+        scored_pairs.sort(key=lambda x: x[0], reverse=True)
+        top_score, top_s, top_e = scored_pairs[0]
+        if top_score >= 50.0:
+            best_start = top_s
+            best_end = top_e
+            best_start.semantic_type = DateSemanticType.BILLING_PERIOD_START
+            best_end.semantic_type = DateSemanticType.BILLING_PERIOD_END
+
+    # Step 5: Fallback for single-date / prepaid recharge bills
+    if not best_start:
+        best_start = anchor_c or (date_candidates[0] if date_candidates else None)
+
+    # Check for explicit validity candidate (e.g. 28 Days, 84 Days)
+    if best_start and not best_end and best_start.value:
         validity_candidates = [c for c in candidates if c.field_type == FieldType.VALIDITY]
         if validity_candidates:
             try:
                 val_days = int(validity_candidates[0].value)
-                d_start = datetime.strptime(str(start_date.value), "%Y-%m-%d")
+                d_start = datetime.strptime(str(best_start.value), "%Y-%m-%d")
                 d_end = d_start + timedelta(days=val_days - 1)
                 iso_end = d_end.strftime("%Y-%m-%d")
-                end_date = Candidate(
+                best_end = Candidate(
                     field_type=FieldType.DATE,
                     value=iso_end,
                     raw_text=f"{val_days} Days",
                     label="Billing Period End (Computed from Plan Validity)",
-                    page=start_date.page,
+                    page=best_start.page,
                     semantic_type=DateSemanticType.BILLING_PERIOD_END,
                     confidence=0.92,
                     evidence_sources=["computed_from_validity"],
@@ -141,52 +264,9 @@ def select_billing_dates(
             except Exception:
                 pass
 
-    # If no explicitly labeled start/end dates, look at other date candidates
-    if not start_date and not end_date:
-        non_due = [
-            c for c in date_candidates
-            if c.semantic_type not in (DateSemanticType.DUE_DATE, DateSemanticType.ACTIVATION_DATE)
-        ]
-        if len(non_due) >= 2:
-            sorted_dates = sorted(non_due, key=lambda c: c.value)
-            try:
-                d_first = datetime.strptime(sorted_dates[0].value, "%Y-%m-%d")
-                d_last = datetime.strptime(sorted_dates[-1].value, "%Y-%m-%d")
-                diff_days = (d_last - d_first).days
-                # A true billing period span is typically 20 to 95 days
-                if 20 <= diff_days <= 95:
-                    start_date = sorted_dates[0]
-                    end_date = sorted_dates[-1]
-                    start_date.semantic_type = DateSemanticType.BILLING_PERIOD_START
-                    end_date.semantic_type = DateSemanticType.BILLING_PERIOD_END
-                else:
-                    start_date = sorted_dates[0]
-                    end_date = None
-            except Exception:
-                start_date = sorted_dates[0]
-                end_date = None
+    final_bill_date = bill_date_c or anchor_c or best_start
 
-    # Fallback to bill_date or payment_date if start_date is still None
-    if not start_date:
-        if bill_date:
-            start_date = bill_date
-        elif payment_date:
-            start_date = payment_date
-            if not bill_date:
-                bill_date = payment_date
-        elif date_candidates:
-            start_date = date_candidates[0]
-
-    # Bill date defaults to start date if not explicitly found
-    if not bill_date and start_date:
-        bill_date = start_date
-
-    # Ensure start_date <= end_date if both are present
-    if start_date and end_date and start_date.value and end_date.value:
-        if str(start_date.value) > str(end_date.value):
-            start_date, end_date = end_date, start_date
-
-    return bill_date, start_date, end_date
+    return final_bill_date, best_start, best_end
 
 
 def _find_by_semantic(

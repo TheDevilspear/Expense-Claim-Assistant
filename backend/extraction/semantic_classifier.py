@@ -107,6 +107,15 @@ _DATE_LABEL_MAP = {
     DateSemanticType.ACTIVATION_DATE: [
         "activation date", "activated on", "start date", "installation date",
     ],
+    DateSemanticType.PLAN_EXPIRY_DATE: [
+        "due date current plan", "current plan expiry", "plan expiry date",
+        "plan validity till", "plan valid till", "next recharge due",
+        "plan expiration", "subscription end", "subscription expires",
+        "package validity till", "tariff validity", "validity till", "validity up to",
+    ],
+    DateSemanticType.RENEWAL_DATE: [
+        "next renewal date", "renewal due on", "renewal date", "auto renewal",
+    ],
     DateSemanticType.TRANSACTION_TIMESTAMP: [
         "transaction timestamp", "transaction date & time",
     ],
