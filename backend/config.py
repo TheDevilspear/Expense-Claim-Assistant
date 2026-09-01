@@ -49,6 +49,6 @@ def get_base_url():
 
 def get_timeout():
     try:
-        return float(os.environ.get("OPENROUTER_TIMEOUT_SECONDS", "8.0"))
+        return float(os.environ.get("OPENROUTER_TIMEOUT_SECONDS", "3.5"))
     except ValueError:
-        return 8.0
+        return 3.5

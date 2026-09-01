@@ -220,8 +220,6 @@ def select_billing_dates(
             diff_start_anchor = (d_start - anchor_dt).days
             if -45 <= diff_start_anchor <= 0:
                 score += 30.0
-            elif diff_start_anchor < -400:
-                score -= 100.0  # Old past registration date
 
         scored_pairs.append((score, s, e))
 
@@ -232,7 +230,7 @@ def select_billing_dates(
     if scored_pairs:
         scored_pairs.sort(key=lambda x: x[0], reverse=True)
         top_score, top_s, top_e = scored_pairs[0]
-        if top_score >= 50.0:
+        if top_score >= 30.0:
             best_start = top_s
             best_end = top_e
             best_start.semantic_type = DateSemanticType.BILLING_PERIOD_START

@@ -498,7 +498,7 @@ export default function ExpenseClaimForm() {
         claim.attachments.forEach((item) => formData.append('invoices', item.file));
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 45000);
+        const timeoutId = setTimeout(() => controller.abort(), 75000);
 
         const response = await fetch('/api/claims', {
           method: 'POST',
@@ -518,7 +518,7 @@ export default function ExpenseClaimForm() {
     } catch (err) {
       console.error('Batch submission failed:', err);
       if (err.name === 'AbortError') {
-        setServerError('Request timed out after 45 seconds. Please check the backend server and try again.');
+        setServerError('Request timed out. The document processing took longer than expected. Please retry or upload a clearer file.');
       } else {
         setServerError(err.message || 'Could not connect to backend server on port 5000.');
       }

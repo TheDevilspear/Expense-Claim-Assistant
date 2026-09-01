@@ -54,7 +54,14 @@ let cachedPythonBin = null;
 async function getPythonExecutable() {
   if (cachedPythonBin) return cachedPythonBin;
   const venvPython = path.join(__dirname, '..', '.venv', 'bin', 'python');
-  const candidates = [process.env.PYTHON_PATH, venvPython, 'python3', 'python', 'py'].filter(Boolean);
+  const candidates = [
+    process.env.PYTHON_PATH,
+    '/home/linuxbrew/.linuxbrew/bin/python3',
+    venvPython,
+    'python3',
+    'python',
+    'py',
+  ].filter(Boolean);
   for (const cmd of candidates) {
     try {
       await execFileAsync(cmd, ['--version']);
@@ -107,7 +114,7 @@ async function runFullMultiAgentPipeline(claimId, filePath, userClaimInput, blur
   try {
     await fs.promises.writeFile(tempInputPath, JSON.stringify(inputPayload), 'utf-8');
     const pyBin = await getPythonExecutable();
-    const { stdout, stderr } = await execFileAsync(pyBin, [runnerScript, tempInputPath], { timeout: 40000 });
+    const { stdout, stderr } = await execFileAsync(pyBin, [runnerScript, tempInputPath], { timeout: 60000 });
     if (stderr) console.warn('[Python stderr]:', stderr);
 
     fs.promises.unlink(tempInputPath).catch(() => {});

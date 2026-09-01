@@ -99,22 +99,32 @@ def arbitrate(
     prompt = _build_targeted_prompt(field_name, candidates)
 
     candidate_models = [model]
-    # Free fallback vision models on OpenRouter in case primary is unavailable/404
+    # Fast fallback vision models on OpenRouter in case primary is unavailable/404
     fallback_pool = [
-        "openrouter/free",
         "google/gemini-2.0-flash-001",
+        "openrouter/free",
         "meta-llama/llama-3.2-11b-vision-instruct:free",
-        "qwen/qwen-2.5-vl-72b-instruct:free",
-        "mistralai/pixtral-12b:free",
     ]
     for fb in fallback_pool:
         if fb not in candidate_models:
             candidate_models.append(fb)
 
-    import socket
-    socket.setdefaulttimeout(timeout)
+    import time
+    start_time = time.time()
+    max_budget_seconds = 4.0  # Max total time allowed for vision arbitration per field
+    per_model_timeout = min(timeout, 2.5)
 
-    for current_model in candidate_models:
+    import socket
+    socket.setdefaulttimeout(per_model_timeout)
+
+    for current_model in candidate_models[:3]:  # Try at most 3 models within budget
+        elapsed = time.time() - start_time
+        if elapsed >= max_budget_seconds:
+            logger.info("Vision arbitration budget exceeded (%.1fs); falling back to local extraction.", elapsed)
+            break
+
+        remaining_timeout = max(1.0, min(per_model_timeout, max_budget_seconds - elapsed))
+
         payload = {
             "model": current_model,
             "messages": [
@@ -150,7 +160,7 @@ def arbitrate(
                 method="POST",
             )
 
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, timeout=remaining_timeout) as resp:
                 resp_body = resp.read().decode("utf-8")
                 data = json.loads(resp_body)
 
@@ -162,7 +172,7 @@ def arbitrate(
                         logger.info("Vision arbitration succeeded (%s) for field '%s': %s", current_model, field_name, parsed.get("value"))
                         return parsed
                 elif "error" in data:
-                    logger.error("OpenRouter API error response (%s): %s", current_model, data["error"])
+                    logger.warning("OpenRouter API error response (%s): %s", current_model, data["error"])
 
         except urllib.error.HTTPError as http_err:
             err_body = ""
@@ -176,9 +186,9 @@ def arbitrate(
             )
             # If 404 or 429, loop to next fallback model
             continue
-        except urllib.error.URLError as url_err:
-            logger.warning("OpenRouter connection error on %s: %s", endpoint_url, url_err.reason)
-            break
+        except (urllib.error.URLError, socket.timeout, TimeoutError) as net_err:
+            logger.warning("OpenRouter timeout/connection error for model '%s': %s", current_model, net_err)
+            continue
         except Exception as err:
             logger.warning("Vision arbitration unexpected exception: %s", err)
             break

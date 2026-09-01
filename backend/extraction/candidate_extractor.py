@@ -185,10 +185,17 @@ def extract_date_candidates(evidence: PageEvidence) -> List[Candidate]:
     candidates: List[Candidate] = []
     seen_values = set()
 
-    # 1. Check multi-word date ranges (e.g. "Statement Period: 08 Jan 2022 to 07 Feb 2022")
-    search_texts = [evidence.raw_text] if evidence.raw_text else []
+    # Normalize wrapped date tokens split across newlines (e.g. "21-JAN-\n2023" or "21-\nJAN-2023")
+    raw_cleaned = evidence.raw_text or ""
+    if raw_cleaned:
+        raw_cleaned = re.sub(r"(\b\d{1,2}(?:st|nd|rd|th)?)\s*[-/]?\s*\n\s*([A-Za-z]{3,9})\s*[-/]?\s*\n?\s*(\d{2,4}\b)", r"\1-\2-\3", raw_cleaned, flags=re.I)
+        raw_cleaned = re.sub(r"(\b\d{1,2}(?:st|nd|rd|th)?-[A-Za-z]{3,9}-?)\s*\n\s*(\d{2,4}\b)", r"\1\2", raw_cleaned, flags=re.I)
+        raw_cleaned = re.sub(r"(\b\d{1,2}(?:st|nd|rd|th)?-?)\s*\n\s*([A-Za-z]{3,9}-\d{2,4}\b)", r"\1\2", raw_cleaned, flags=re.I)
+
+    search_texts = [raw_cleaned] if raw_cleaned else []
     search_texts.extend([line.full_text for line in evidence.lines])
 
+    # 1. Check multi-word date ranges (e.g. "Statement Period: 08 Jan 2022 to 07 Feb 2022")
     for text in search_texts:
         for match in _DATE_RANGE_REGEX.finditer(text):
             raw_start = match.group(1).strip()
@@ -223,9 +230,48 @@ def extract_date_candidates(evidence: PageEvidence) -> List[Candidate]:
                     ))
                     seen_values.add(iso_end)
 
-    # 2. General date scan across all lines (and raw_text fallback)
+    # 1b. Check tabular period matches (e.g. "From Date ... 21-JAN-2023 ... To Date ... 20-FEB-2023")
+    _TABLE_PERIOD_REGEX = re.compile(
+        rf'(?:From\s+Date|Start\s+Date|Period\s+From)[\s\S]{{0,120}}?({_DATE_TOKEN_REGEX})[\s\S]{{0,120}}?(?:To\s+Date|End\s+Date|Period\s+To)[\s\S]{{0,120}}?({_DATE_TOKEN_REGEX})',
+        re.I
+    )
+    for text in search_texts:
+        for match in _TABLE_PERIOD_REGEX.finditer(text):
+            raw_start = match.group(1).strip()
+            raw_end = match.group(2).strip()
+            iso_start = _parse_date_string(raw_start)
+            iso_end = _parse_date_string(raw_end)
+
+            if iso_start and iso_end:
+                if iso_start not in seen_values:
+                    candidates.append(Candidate(
+                        field_type=FieldType.DATE,
+                        value=iso_start,
+                        raw_text=raw_start,
+                        label="From Date (Service Period Start)",
+                        page=evidence.page_number,
+                        semantic_type=DateSemanticType.BILLING_PERIOD_START,
+                        confidence=0.98,
+                        evidence_sources=[f"{evidence.extraction_method.value}_table_period_match"],
+                    ))
+                    seen_values.add(iso_start)
+
+                if iso_end not in seen_values:
+                    candidates.append(Candidate(
+                        field_type=FieldType.DATE,
+                        value=iso_end,
+                        raw_text=raw_end,
+                        label="To Date (Service Period End)",
+                        page=evidence.page_number,
+                        semantic_type=DateSemanticType.BILLING_PERIOD_END,
+                        confidence=0.98,
+                        evidence_sources=[f"{evidence.extraction_method.value}_table_period_match"],
+                    ))
+                    seen_values.add(iso_end)
+
+    # 2. General date scan across all lines (and raw_cleaned fallback)
     lines_to_scan = evidence.lines if evidence.lines else [
-        Line(tokens=[], full_text=l, y_center=0.0) for l in (evidence.raw_text or "").splitlines()
+        Line(tokens=[], full_text=l, y_center=0.0) for l in raw_cleaned.splitlines()
     ]
 
     for line_idx, line in enumerate(lines_to_scan):
@@ -258,6 +304,10 @@ def extract_date_candidates(evidence: PageEvidence) -> List[Candidate]:
                 label_lower = label.lower()
                 if any(kw in label_lower for kw in ["due date current plan", "current plan expiry", "plan valid till", "plan validity till", "plan expiry", "plan expiration", "subscription end"]):
                     sem_type = DateSemanticType.PLAN_EXPIRY_DATE
+                elif any(kw in label_lower for kw in ["from date", "period from", "service from", "usage from"]):
+                    sem_type = DateSemanticType.BILLING_PERIOD_START
+                elif any(kw in label_lower for kw in ["to date", "period to", "service to", "service end", "usage to"]):
+                    sem_type = DateSemanticType.BILLING_PERIOD_END
                 elif any(kw in label_lower for kw in ["bill date", "invoice date", "statement date", "date of invoice", "billing date", "date of issue", "issue date"]):
                     sem_type = DateSemanticType.BILL_DATE
                 elif any(kw in label_lower for kw in ["due date", "pay by", "payable by", "due on"]):

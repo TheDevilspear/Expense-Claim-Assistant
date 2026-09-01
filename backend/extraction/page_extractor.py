@@ -66,12 +66,41 @@ def _extract_native_pdf_page(file_path: str, page_number: int) -> PageEvidence:
 
     # Get plain text for raw_text field
     raw_text = page.get_text("text") or ""
+    import re
+    raw_text = re.sub(r"(\b\d{1,2}(?:st|nd|rd|th)?)\s*[-/]?\s*\n\s*([A-Za-z]{3,9})\s*[-/]?\s*\n?\s*(\d{2,4}\b)", r"\1-\2-\3", raw_text, flags=re.I)
+    raw_text = re.sub(r"(\b\d{1,2}(?:st|nd|rd|th)?-[A-Za-z]{3,9}-?)\s*\n\s*(\d{2,4}\b)", r"\1\2", raw_text, flags=re.I)
+    raw_text = re.sub(r"(\b\d{1,2}(?:st|nd|rd|th)?-?)\s*\n\s*([A-Za-z]{3,9}-\d{2,4}\b)", r"\1\2", raw_text, flags=re.I)
 
     # Get positioned words: (x0, y0, x1, y1, "word", block_no, line_no, word_no)
     words = page.get_text("words") or []
 
+    # Stitch vertically adjacent hyphenated date tokens in the same column
+    stitched_words = []
+    skip_indices = set()
+    for i in range(len(words)):
+        if i in skip_indices:
+            continue
+        w1 = words[i]
+        text1 = w1[4].strip()
+        if (text1.endswith("-") or text1.endswith("/")) and i + 1 < len(words):
+            x0_1, y0_1, x1_1, y1_1 = w1[0], w1[1], w1[2], w1[3]
+            for j in range(len(words)):
+                if j == i or j in skip_indices:
+                    continue
+                w2 = words[j]
+                x0_2, y0_2, x1_2, y1_2 = w2[0], w2[1], w2[2], w2[3]
+                if abs(x0_1 - x0_2) < 10.0 and 0 < (y0_2 - y1_1) < 25.0:
+                    text2 = w2[4].strip()
+                    merged_text = text1 + text2
+                    stitched_words.append((x0_1, y0_1, max(x1_1, x1_2), y1_2, merged_text))
+                    skip_indices.add(i)
+                    skip_indices.add(j)
+                    break
+        if i not in skip_indices:
+            stitched_words.append((w1[0], w1[1], w1[2], w1[3], text1))
+
     tokens = []
-    for w in words:
+    for w in stitched_words:
         text = w[4].strip()
         if not text:
             continue
