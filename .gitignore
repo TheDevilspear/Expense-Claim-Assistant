@@ -13,6 +13,5 @@ backend/uploads/*
 !backend/uploads/.gitkeep
 backend/tests/
 tests/
-report.md
 report.docx
 *.docx
