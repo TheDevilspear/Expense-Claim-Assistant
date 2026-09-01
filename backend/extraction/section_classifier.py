@@ -25,17 +25,20 @@ _SECTION_KEYWORDS = {
         "payment successful", "paid successfully",
     ],
     SectionType.PREPAID_RECHARGE: [
-        "recharge successful", "recharge receipt", "prepaid recharge",
-        "top-up", "voucher", "recharge of",
+        "jio prepaid", "airtel prepaid", "vi prepaid", "bsnl prepaid", "vodafone prepaid",
+        "recharge successful", "recharge receipt", "prepaid recharge", "prepaid",
+        "top-up", "topup", "voucher", "recharge of", "mobile recharge",
     ],
     SectionType.BROADBAND_BILL: [
+        "jio fiber", "jiofiber", "airtel xstream", "airtel broadband",
         "broadband", "fiber", "fibre", "ftth", "dsl", "xstream",
-        "jiofiber", "act fibernet", "tikona", "wifi", "wi-fi",
+        "act fibernet", "tikona", "wifi", "wi-fi", "tata play fiber",
         "fixedline and broadband",
     ],
     SectionType.POSTPAID_BILL: [
-        "postpaid", "monthly statement", "bill summary",
-        "statement period", "tax invoice", "account number",
+        "jio postpaid", "airtel postpaid", "vi postpaid", "bsnl postpaid", "vodafone postpaid",
+        "airtel black", "postpaid bill", "postpaid", "post-paid",
+        "monthly statement", "bill summary", "statement period", "tax invoice", "account number",
     ],
 }
 

@@ -215,13 +215,13 @@ def determine_bill_type(
     if not is_broadband and not is_prepaid and not is_postpaid:
         for c in candidates:
             text_to_check = f"{c.label or ''} {c.raw_text or ''} {c.value or ''}".lower()
-            if any(kw in text_to_check for kw in ["broadband", "fiber", "dsl", "ftth", "wifi", "xstream", "jiofiber", "tikona", "act fibernet"]):
+            if any(kw in text_to_check for kw in ["broadband", "fiber", "fibre", "dsl", "ftth", "wifi", "xstream", "jiofiber", "jio fiber", "tikona", "act fibernet"]):
                 is_broadband = True
                 break
-            if any(kw in text_to_check for kw in ["prepaid", "recharge", "top-up", "voucher"]):
+            if any(kw in text_to_check for kw in ["jio prepaid", "airtel prepaid", "vi prepaid", "bsnl prepaid", "vodafone prepaid", "prepaid", "recharge", "top-up", "topup", "voucher", "mobile recharge"]):
                 is_prepaid = True
                 break
-            if any(kw in text_to_check for kw in ["postpaid", "statement", "bill summary", "tax invoice", "bill", "airtel", "jio", "vodafone", "bsnl"]):
+            if any(kw in text_to_check for kw in ["jio postpaid", "airtel postpaid", "vi postpaid", "bsnl postpaid", "vodafone postpaid", "postpaid", "post-paid", "statement", "bill summary", "tax invoice", "bill", "airtel", "jio", "vodafone", "bsnl"]):
                 is_postpaid = True
                 break
 
