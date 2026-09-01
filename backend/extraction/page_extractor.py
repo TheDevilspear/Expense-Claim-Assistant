@@ -53,6 +53,7 @@ def _extract_native_pdf_page(file_path: str, page_number: int) -> PageEvidence:
         except ImportError:
             fitz = None
     if fitz is None:
+        return PageEvidence(
             page_number=page_number, tokens=[], lines=[],
             raw_text="", extraction_method=ExtractionMethod.NATIVE_PDF,
         )
