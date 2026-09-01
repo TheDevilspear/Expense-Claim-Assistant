@@ -3,9 +3,9 @@ Approver Agent Implementation.
 Responsibilities:
 1. Ingests MakerOutput and CheckerReport from Maker and Checker agents.
 2. Applies the final decision matrix:
-   - AUTO_APPROVE: All checks passed with high confidence AND amount <= ₹2,000.00 threshold.
-   - AUTO_REJECT: Blatant fraud (duplicate invoice), irrelevant document, or policy violation (> ₹5k cap, top-ups).
-   - ESCALATE_TO_HUMAN: High-value legitimate claim (> ₹2,000), low extraction confidence, or amount mismatch.
+   - AUTO_APPROVE: All checks passed with high confidence AND amount <= reimbursable cap.
+   - AUTO_REJECT: Blatant fraud (duplicate invoice), irrelevant document, or policy violation (> cap, top-ups).
+   - ESCALATE_TO_HUMAN: Mismatches, low extraction confidence, or unverified documents.
 3. Generates clear, specific, actionable user-facing explanation (never a bare 'rejected').
 4. Formulates complete audit log rationale with risk score calculation.
 """
@@ -16,6 +16,7 @@ from typing import Dict, Any, List, Optional
 from models.maker_schema import MakerOutput
 from models.checker_schema import CheckerReport, CheckStatus
 from models.approver_schema import ApproverDecision, ApprovalDecisionType
+import policy
 
 
 class ApproverAgent:
@@ -23,7 +24,10 @@ class ApproverAgent:
     Approver Agent: Final decision engine and audit trail assembler.
     """
 
-    AUTO_APPROVE_AMOUNT_THRESHOLD = 5000.00  # Max ₹5,000 for auto-approval
+    def __init__(self):
+        self.max_cap = policy.POLICY_MAX_REIMBURSABLE_CAP
+        self.auto_approve_threshold = policy.AUTO_APPROVE_AMOUNT_THRESHOLD
+        self.confidence_threshold = policy.CONFIDENCE_THRESHOLD
 
     def process(self, maker_output: MakerOutput, checker_report: CheckerReport) -> ApproverDecision:
         """
@@ -69,16 +73,15 @@ class ApproverAgent:
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
 
-        # Policy Cap Check (> ₹5,000 Maximum Reimbursable Limit)
-        MAX_REIMBURSABLE_CAP = 5000.0
-        if claimed_amt > MAX_REIMBURSABLE_CAP or (verified_amt and verified_amt > MAX_REIMBURSABLE_CAP):
+        # Policy Cap Check (> Policy Cap Maximum Reimbursable Limit)
+        if claimed_amt > self.max_cap or (verified_amt and verified_amt > self.max_cap):
             violating_amt = max(claimed_amt, verified_amt or 0.0)
             return ApproverDecision(
                 claim_id=claim_id,
                 decision=ApprovalDecisionType.AUTO_REJECT,
                 approved_amount_inr=None,
-                actionable_user_reason=f"Rejected (Policy Cap): Claimed ₹{violating_amt:,.2f} exceeds company limit of ₹5,000 per claim.",
-                internal_rationale=f"Rejected automatically because amount ₹{violating_amt:,.2f} exceeds the ₹5,000.00 reimbursable policy cap.",
+                actionable_user_reason=f"Rejected (Policy Cap): Claimed ₹{violating_amt:,.2f} exceeds company limit of ₹{self.max_cap:,.0f} per claim.",
+                internal_rationale=f"Rejected automatically because amount ₹{violating_amt:,.2f} exceeds the ₹{self.max_cap:,.2f} reimbursable policy cap.",
                 risk_score=0.75,
                 escalation_tags=["POLICY_CAP_EXCEEDED"],
                 requires_human_action=False,
@@ -87,7 +90,7 @@ class ApproverAgent:
 
         # Amount Discrepancy Check (Claimed Amount > Invoice Amount)
         if (
-            extracted.total_amount_inr.confidence >= 0.80
+            extracted.total_amount_inr.confidence >= self.confidence_threshold
             and claimed_amt > verified_amt
         ):
             diff = max(0.0, claimed_amt - verified_amt)
@@ -150,7 +153,6 @@ class ApproverAgent:
 
         # Case 2b: Category Mismatch
         if checker_report.has_mismatch:
-            mismatch_check = next((c for c in checker_report.checks if c.status == CheckStatus.FAIL_MISMATCH), None)
             cat_claimed = claimed.claimed_category.capitalize()
             doc_type_label = extracted.detected_document_type.replace('_', ' ').title()
             return ApproverDecision(
@@ -166,7 +168,7 @@ class ApproverAgent:
             )
 
         # -------------------------------------------------------------
-        # Decision Case 3: Clean Auto-Approval (<= ₹5,000 & 100% Pass)
+        # Decision Case 3: Clean Auto-Approval (<= Threshold & 100% Pass)
         # -------------------------------------------------------------
         vendor_name = extracted.vendor_name.value or "telecom"
         return ApproverDecision(

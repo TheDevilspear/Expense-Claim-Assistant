@@ -6,6 +6,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { claimsStore } from './services/claimsStore.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -48,8 +49,6 @@ const upload = multer({
 });
 
 app.use('/uploads', express.static(UPLOAD_DIR));
-
-const claimsDatabase = [];
 
 let cachedPythonBin = null;
 async function getPythonExecutable() {
@@ -113,7 +112,6 @@ async function runFullMultiAgentPipeline(claimId, filePath, userClaimInput, blur
 
     fs.promises.unlink(tempInputPath).catch(() => {});
 
-    // Extract JSON between delimiters or fallback to json match
     const startIdx = stdout.indexOf('__AGENT_JSON_START__');
     const endIdx = stdout.indexOf('__AGENT_JSON_END__');
     if (startIdx !== -1 && endIdx !== -1) {
@@ -138,64 +136,21 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/api/claims', (req, res) => {
-  res.json({ success: true, count: claimsDatabase.length, claims: claimsDatabase });
+  const claims = claimsStore.getAllClaims();
+  res.json({ success: true, count: claims.length, claims });
 });
 
 app.delete('/api/claims', (req, res) => {
-  claimsDatabase.length = 0;
-  try {
-    const indexPath = path.join(__dirname, 'data', 'claims_index.json');
-    if (fs.existsSync(indexPath)) {
-      fs.writeFileSync(indexPath, JSON.stringify({ claims: [] }, null, 2), 'utf-8');
-    }
-    const files = fs.readdirSync(UPLOAD_DIR);
-    for (const file of files) {
-      fs.unlinkSync(path.join(UPLOAD_DIR, file));
-    }
-  } catch (err) {
-    console.error('Error clearing storage:', err);
-  }
+  claimsStore.clearAll();
   res.json({ success: true, message: 'All stored claims, duplicate history, and uploads have been cleared.' });
 });
 
-// Delete a specific claim by Claim ID (e.g. DELETE /api/claims/CLM-1787425132740)
+// Delete a specific claim by Claim ID
 app.delete('/api/claims/:claimId', (req, res) => {
   const { claimId } = req.params;
-  const initialCount = claimsDatabase.length;
-  
-  // 1. Remove from in-memory database
-  const claimIndex = claimsDatabase.findIndex((c) => c.id === claimId || c.claim_id === claimId);
-  let deletedClaim = null;
-  if (claimIndex !== -1) {
-    deletedClaim = claimsDatabase.splice(claimIndex, 1)[0];
-  }
+  const deleted = claimsStore.deleteClaim(claimId);
 
-  // 2. Remove associated files on disk
-  if (deletedClaim && deletedClaim.files) {
-    deletedClaim.files.forEach((f) => {
-      try {
-        if (f.pathOnDisk && fs.existsSync(f.pathOnDisk)) {
-          fs.unlinkSync(f.pathOnDisk);
-        }
-      } catch (err) {
-        console.warn(`Could not delete file: ${f.pathOnDisk}`, err);
-      }
-    });
-  }
-
-  // 3. Remove from claims_index.json ledger
-  try {
-    const indexPath = path.join(__dirname, 'data', 'claims_index.json');
-    if (fs.existsSync(indexPath)) {
-      const indexData = JSON.parse(fs.readFileSync(indexPath, 'utf-8') || '{"claims":[]}');
-      const filteredClaims = (indexData.claims || []).filter((c) => c.claim_id !== claimId && c.id !== claimId);
-      fs.writeFileSync(indexPath, JSON.stringify({ claims: filteredClaims }, null, 2), 'utf-8');
-    }
-  } catch (err) {
-    console.error(`Error updating claims_index.json for ${claimId}:`, err);
-  }
-
-  if (!deletedClaim && initialCount === claimsDatabase.length) {
+  if (!deleted) {
     return res.status(404).json({ success: false, message: `Claim with ID '${claimId}' not found.` });
   }
 
@@ -218,7 +173,6 @@ app.post('/api/claims', upload.array('invoices', 2), async (req, res) => {
     }
 
     const claimId = `CLM-${Date.now()}`;
-    const serverBaseUrl = `http://localhost:${PORT}`;
 
     // 1. Process files & execute Blur Assessment
     const savedFiles = await Promise.all(
@@ -229,7 +183,7 @@ app.post('/api/claims', upload.array('invoices', 2), async (req, res) => {
           storedFileName: file.filename,
           sizeMB: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
           mimetype: file.mimetype,
-          url: `${serverBaseUrl}/uploads/${file.filename}`,
+          url: `/uploads/${file.filename}`,
           pathOnDisk: file.path,
           blur_assessment: blurData,
         };
@@ -268,7 +222,7 @@ app.post('/api/claims', upload.array('invoices', 2), async (req, res) => {
       submittedAt: new Date().toLocaleString('en-IN'),
     };
 
-    claimsDatabase.unshift(newClaim);
+    claimsStore.saveClaim(newClaim);
 
     console.log(`[+] Claim Processed: ${newClaim.id} | Decision: ${agentResults.approver_decision?.decision}`);
 

@@ -247,20 +247,8 @@ def extract_identifier_candidates(evidence: PageEvidence) -> List[Candidate]:
     return candidates
 
 
-# ---------------------------------------------------------------------------
-# Vendor candidates
-# ---------------------------------------------------------------------------
+from extraction.constants import VENDOR_PATTERNS
 
-_VENDOR_PATTERNS = [
-    (re.compile(r'\bjio\b|reliance\s+jio', re.I), "Jio", "Reliance Jio Infocomm"),
-    (re.compile(r'\bairtel\b|bharti\s+airtel', re.I), "Airtel", "Bharti Airtel Limited"),
-    (re.compile(r'\bact\s*fibernet\b|atria\s+convergence', re.I), "ACT Fibernet", "Atria Convergence Technologies"),
-    (re.compile(r'\bvodafone\b|\bvi\b(?!\w)|vodafone\s+idea', re.I), "Vodafone", "Vodafone Idea Limited"),
-    (re.compile(r'\bbsnl\b|bharat\s+sanchar', re.I), "BSNL", "Bharat Sanchar Nigam Limited"),
-    (re.compile(r'\btikona\b', re.I), "Tikona", "Tikona Infinet"),
-    (re.compile(r'\btata\s+sky\b|\btata\s+play\b', re.I), "Tata Play", "Tata Play Limited"),
-    (re.compile(r'\bphonepe\b', re.I), "PhonePe", "PhonePe Private Limited"),
-]
 
 
 def extract_vendor_candidates(evidence: PageEvidence) -> List[Candidate]:
@@ -269,7 +257,7 @@ def extract_vendor_candidates(evidence: PageEvidence) -> List[Candidate]:
     # Replace underscores and hyphens with spaces for boundary matching (e.g. jio_bill -> jio bill)
     clean_text = evidence.raw_text.replace("_", " ").replace("-", " ")
 
-    for pattern, vendor_name, full_name in _VENDOR_PATTERNS:
+    for pattern, vendor_name, full_name in VENDOR_PATTERNS:
         match = pattern.search(clean_text)
         if match:
             candidates.append(Candidate(

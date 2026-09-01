@@ -51,43 +51,13 @@ class BlurResult:
         return asdict(self)
 
 
+from extraction.pdf_utils import load_file_as_grayscale_numpy
+
+
 def load_image_as_gray(file_path_or_bytes: Union[str, bytes]) -> np.ndarray:
     """Loads image or first page of PDF as grayscale numpy array."""
-    if isinstance(file_path_or_bytes, bytes):
-        nparr = np.frombuffer(file_path_or_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Failed to decode image bytes.")
-        return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return load_file_as_grayscale_numpy(file_path_or_bytes)
 
-    file_path = str(file_path_or_bytes)
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"File not found: {file_path}")
-
-    # Handle PDF files
-    if file_path.lower().endswith(".pdf"):
-        try:
-            import fitz  # PyMuPDF
-            doc = fitz.open(file_path)
-            if len(doc) == 0:
-                raise ValueError("PDF document is empty.")
-            page = doc[0]
-            pix = page.get_pixmap(dpi=150)
-            img_data = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-            if pix.n == 4:
-                return cv2.cvtColor(img_data, cv2.COLOR_RGBA2GRAY)
-            elif pix.n == 3:
-                return cv2.cvtColor(img_data, cv2.COLOR_RGB2GRAY)
-            return img_data
-        except ImportError:
-            # Fallback if fitz is not installed
-            pass
-
-    # Read standard image formats
-    img = cv2.imread(file_path, cv2.IMREAD_COLOR)
-    if img is None:
-        raise ValueError(f"Could not read image file: {file_path}")
-    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
 
 def crop_text_region(gray_img: np.ndarray) -> np.ndarray:

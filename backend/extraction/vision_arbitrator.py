@@ -1,36 +1,31 @@
 """
-Stage 7: Vision LLM Arbitrator.
+Stage 7: Vision LLM Arbitrator with Resilient Fallback.
 
 Invoked ONLY when local extraction produces ambiguous or missing results.
 Sends targeted, per-field prompts to the Vision LLM instead of asking it
 to "extract everything" from the entire document.
 
-Typical usage: 0 calls for clean digital PDFs, 1-2 calls for ambiguous fields.
+Resilience Guarantee:
+If the OpenRouter API key is invalid, missing, rate-limited, timed out,
+or unreachable, this module logs the incident and returns None cleanly,
+allowing the deterministic rule/heuristic pipeline to continue without failure.
 """
 
+import sys
 import os
 import re
 import json
-import base64
+import logging
 import urllib.request
 import urllib.error
 from typing import List, Optional
 from pathlib import Path
+
+import config
 from models.extraction_schema import Candidate, FieldType
+from extraction.pdf_utils import render_page_to_data_uri
 
-
-def _load_env():
-    """Load .env file for API keys."""
-    root_env = Path(__file__).resolve().parent.parent.parent / ".env"
-    if root_env.exists():
-        for line in root_env.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
-
-
-_load_env()
+logger = logging.getLogger(__name__)
 
 
 def needs_vision_arbitration(candidates: List[Candidate], field_type: FieldType) -> bool:
@@ -70,19 +65,21 @@ def arbitrate(
 ) -> Optional[dict]:
     """
     Sends a targeted Vision LLM prompt to resolve ambiguity for a specific field.
-
-    Returns dict with {"value": ..., "reasoning": "..."} or None on failure.
+    Returns dict with {"value": ..., "reasoning": "..."} or None on any API/network failure.
     """
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = config.get_api_key()
     if not api_key:
+        logger.debug("OpenRouter API key not configured; skipping vision arbitration.")
         return None
 
-    model = os.environ.get("VISION_MODEL", "nvidia/nemotron-nano-12b-v2-vl:free")
-    base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+    model = config.get_vision_model()
+    base_url = config.get_base_url()
+    timeout = config.get_timeout()
 
-    # Render the specific page as an image
-    image_data_uri = _render_page_to_data_uri(file_path, page_number)
+    # Render the specific page as a data URI
+    image_data_uri = render_page_to_data_uri(file_path, page_number)
     if not image_data_uri:
+        logger.warning("Could not render page %d of %s to data URI for vision arbitration.", page_number, file_path)
         return None
 
     # Build targeted prompt
@@ -112,7 +109,7 @@ def arbitrate(
 
     try:
         import socket
-        socket.setdefaulttimeout(8.0)
+        socket.setdefaulttimeout(timeout)
         req = urllib.request.Request(
             f"{base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
@@ -125,18 +122,45 @@ def arbitrate(
             method="POST",
         )
 
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp_body = resp.read().decode("utf-8")
+            data = json.loads(resp_body)
+
             if "choices" in data and len(data["choices"]) > 0:
                 content = data["choices"][0]["message"]["content"]
                 json_match = re.search(r"\{.*\}", content, re.DOTALL)
                 if json_match:
-                    return json.loads(json_match.group(0))
+                    parsed = json.loads(json_match.group(0))
+                    logger.info("Vision arbitration succeeded for field '%s': %s", field_name, parsed.get("value"))
+                    return parsed
             elif "error" in data:
-                print(f"[!] OpenRouter API Error: {data['error']}", file=sys.stderr)
+                logger.error("OpenRouter API returned error response: %s", data["error"])
+                return None
+
+    except urllib.error.HTTPError as http_err:
+        logger.warning(
+            "OpenRouter HTTP %d error for field '%s' (fallback to heuristics): %s",
+            http_err.code, field_name, http_err.reason
+        )
+        return None
+    except urllib.error.URLError as url_err:
+        logger.warning(
+            "OpenRouter connection error for field '%s' (fallback to heuristics): %s",
+            field_name, url_err.reason
+        )
+        return None
+    except json.JSONDecodeError as json_err:
+        logger.warning(
+            "Failed to decode OpenRouter JSON response for field '%s': %s",
+            field_name, json_err
+        )
+        return None
     except Exception as err:
-        import sys
-        print(f"[!] Vision arbitration failed for {field_name}: {err}", file=sys.stderr)
+        logger.warning(
+            "Vision arbitration unexpected exception for field '%s' (fallback to heuristics): %s",
+            field_name, err
+        )
+        return None
 
     return None
 
@@ -168,34 +192,3 @@ def _build_targeted_prompt(field_name: str, candidates: List[Candidate]) -> str:
         )
 
     return prompt
-
-
-def _render_page_to_data_uri(file_path: str, page_number: int = 0) -> Optional[str]:
-    """Renders a specific page as a compressed base64 data URI for fast Vision API calls."""
-    ext = Path(file_path).suffix.lower()
-
-    if ext == ".pdf":
-        try:
-            import fitz
-            doc = fitz.open(file_path)
-            if page_number < len(doc):
-                # 100 DPI is optimal for readability while keeping payload < 100 KB
-                pix = doc[page_number].get_pixmap(dpi=100)
-                img_bytes = pix.tobytes("jpeg")
-                b64 = base64.b64encode(img_bytes).decode("utf-8")
-                doc.close()
-                return f"data:image/jpeg;base64,{b64}"
-            doc.close()
-        except Exception:
-            pass
-        return None
-
-    # Direct image file
-    mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
-    mime = mime_map.get(ext.lstrip("."), "image/jpeg")
-    try:
-        with open(file_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("utf-8")
-        return f"data:{mime};base64,{b64}"
-    except Exception:
-        return None

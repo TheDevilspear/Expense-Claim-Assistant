@@ -1,5 +1,5 @@
 """
-Duplicate Invoice & Fraud Detection Service.
+Duplicate Invoice & Fraud Detection Service with Concurrency Protection.
 Maintains an index of previously approved and processed claims to catch:
 1. Exact Invoice Number reuse across different claims.
 2. Fingerprint match (Same Vendor + Same Amount + Same Billing Start Date).
@@ -7,11 +7,42 @@ Maintains an index of previously approved and processed claims to catch:
 
 import os
 import json
+import threading
 from typing import Optional, Dict, Any, Tuple
 from pathlib import Path
+from contextlib import contextmanager
+import policy
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 INDEX_FILE = DATA_DIR / "claims_index.json"
+LOCK_FILE = DATA_DIR / "claims_index.lock"
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+# Thread-level reentrant lock
+_THREAD_LOCK = threading.RLock()
+
+
+@contextmanager
+def _process_lock():
+    """Acquires a process-level file lock on Unix systems to guarantee concurrency safety."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with _THREAD_LOCK:
+        if fcntl is not None:
+            with open(LOCK_FILE, "a") as lock_f:
+                try:
+                    fcntl.flock(lock_f, fcntl.LOCK_EX)
+                    yield
+                finally:
+                    try:
+                        fcntl.flock(lock_f, fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+        else:
+            yield
 
 
 class DuplicateDetectionService:
@@ -23,17 +54,34 @@ class DuplicateDetectionService:
     def _ensure_storage(self):
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         if not INDEX_FILE.exists():
-            INDEX_FILE.write_text(json.dumps({"claims": []}, indent=2))
+            with _process_lock():
+                if not INDEX_FILE.exists():
+                    self._write_raw([])
 
-    def _load_index(self) -> list:
+    def _read_raw(self) -> list:
         try:
-            data = json.loads(INDEX_FILE.read_text())
+            if not INDEX_FILE.exists():
+                return []
+            data = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
             return data.get("claims", [])
         except Exception:
             return []
 
+    def _write_raw(self, claims: list):
+        try:
+            temp_file = INDEX_FILE.with_suffix(".tmp")
+            temp_file.write_text(json.dumps({"claims": claims}, indent=2), encoding="utf-8")
+            temp_file.replace(INDEX_FILE)
+        except Exception:
+            pass
+
+    def _load_index(self) -> list:
+        with _process_lock():
+            return self._read_raw()
+
     def _save_index(self, claims: list):
-        INDEX_FILE.write_text(json.dumps({"claims": claims}, indent=2))
+        with _process_lock():
+            self._write_raw(claims)
 
     def check_duplicate(
         self,
@@ -49,13 +97,11 @@ class DuplicateDetectionService:
         """
         claims = self._load_index()
 
-        # Clean strings
         clean_inv = str(invoice_number).strip().upper() if invoice_number else ""
         clean_vendor = str(vendor_name).strip().upper() if vendor_name else ""
         clean_date = str(billing_start_date).strip() if billing_start_date else ""
 
         for past in claims:
-            # Skip current claim comparison if re-evaluating
             if past.get("claim_id") == current_claim_id:
                 continue
 
@@ -65,7 +111,8 @@ class DuplicateDetectionService:
             past_date = str(past.get("billing_start_date") or "").strip()
 
             # Rule 1: Exact Invoice Number Match
-            if clean_inv and past_inv and clean_inv == past_inv and len(clean_inv) >= 4:
+            min_len = policy.MIN_INVOICE_NUMBER_LENGTH
+            if clean_inv and past_inv and clean_inv == past_inv and len(clean_inv) >= min_len:
                 return True, f"Invoice number '{clean_inv}' was already claimed in previous Claim #{past.get('claim_id')} on {past.get('timestamp', 'past submission')}."
 
             # Rule 2: Fingerprint Match (Same Vendor + Same Amount + Same Billing Date)
@@ -91,21 +138,23 @@ class DuplicateDetectionService:
         billing_start_date: Optional[str],
         timestamp: str,
     ):
-        """Records an approved/processed claim in the index."""
-        claims = self._load_index()
-        # Avoid duplicate entries for same claim_id
-        claims = [c for c in claims if c.get("claim_id") != claim_id]
+        """Records an approved/processed claim in the index with non-nested lock protection."""
+        with _process_lock():
+            claims = self._read_raw()
+            # Avoid duplicate entries for same claim_id
+            claims = [c for c in claims if c.get("claim_id") != claim_id]
 
-        claims.append({
-            "claim_id": claim_id,
-            "vendor_name": vendor_name,
-            "invoice_number": invoice_number,
-            "amount_inr": amount_inr,
-            "billing_start_date": billing_start_date,
-            "timestamp": timestamp,
-        })
-        self._save_index(claims)
+            claims.append({
+                "claim_id": claim_id,
+                "vendor_name": vendor_name,
+                "invoice_number": invoice_number,
+                "amount_inr": amount_inr,
+                "billing_start_date": billing_start_date,
+                "timestamp": timestamp,
+            })
+            self._write_raw(claims)
 
     def clear_index(self):
         """Clears index (used for unit test setup/teardown)."""
-        self._save_index([])
+        with _process_lock():
+            self._write_raw([])

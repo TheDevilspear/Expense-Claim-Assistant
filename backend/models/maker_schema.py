@@ -1,6 +1,6 @@
 """
-Pydantic Schemas & Dataclass Bridge for the Maker Agent.
-Works seamlessly with Pydantic v2 if installed, with lightweight pure-Python fallback.
+Schemas for the Maker Agent.
+Works seamlessly with Pydantic v2 if installed, with pure-Python fallback.
 Defines:
 1. FieldExtraction: A single extracted field with its dedicated confidence score.
 2. ExtractedInvoice: All structured fields extracted from the invoice document.
@@ -8,7 +8,7 @@ Defines:
 4. MakerOutput: The immutable handoff packet passed from Maker to Checker Agent.
 """
 
-from typing import Optional, Literal, Any, Dict, Union
+from typing import Optional, Literal, Any, Dict
 import json
 
 try:
@@ -16,19 +16,15 @@ try:
 
     class FieldExtraction(BaseModel):
         value: Optional[Any] = Field(None, description="Standardized typed value")
-        raw_text: Optional[str] = Field(None, description="Exact verbatim text visible on the receipt")
+        raw_text: Optional[str] = Field(None, description="Verbatim text visible on receipt")
         confidence: float = Field(
-            ..., ge=0.0, le=1.0, description="Confidence score (1.0 = explicit & sharp, <0.70 = ambiguous, 0.0 = absent)"
+            ..., ge=0.0, le=1.0, description="Confidence score (1.0 = explicit, 0.0 = absent)"
         )
         explanation: Optional[str] = Field(None, description="Rationale for value and confidence")
 
     class ExtractedInvoice(BaseModel):
-        is_relevant_invoice: bool = Field(
-            ..., description="True if telecom/broadband/mobile bill, False if random/unrelated."
-        )
-        detected_document_type: str = Field(
-            ..., description="e.g. 'TELECOM_INVOICE', 'BROADBAND_BILL', 'MOBILE_RECHARGE_RECEIPT', 'OTHER_NON_TELECOM'"
-        )
+        is_relevant_invoice: bool
+        detected_document_type: str
         vendor_name: FieldExtraction
         invoice_or_account_number: FieldExtraction
         bill_date: FieldExtraction
@@ -42,12 +38,11 @@ try:
 
     class CleanedClaim(BaseModel):
         claimed_amount_inr: float
-        claimed_category: Literal["cellphone", "broadband"]
+        claimed_category: str
         claimed_start_date: str
         claimed_end_date: str
         claimed_validity_days: int
 
-    # Backward-compatible alias
     NormalizedClaim = CleanedClaim
 
     class MakerOutput(BaseModel):
@@ -59,12 +54,10 @@ try:
         timestamp: str
 
         @property
-        def normalized_claim(self):
-            """Backward-compatible alias."""
+        def normalized_claim(self) -> CleanedClaim:
             return self.cleaned_claim
 
 except ImportError:
-    # Pure Python zero-dependency dataclass implementation
     from dataclasses import dataclass, asdict, field
 
     @dataclass
@@ -97,7 +90,6 @@ except ImportError:
         claimed_end_date: str
         claimed_validity_days: int
 
-    # Backward-compatible alias
     NormalizedClaim = CleanedClaim
 
     @dataclass
@@ -110,15 +102,14 @@ except ImportError:
         invoice_metadata: Dict[str, Any] = field(default_factory=dict)
 
         @property
-        def normalized_claim(self):
-            """Backward-compatible alias."""
+        def normalized_claim(self) -> CleanedClaim:
             return self.cleaned_claim
-
-        def model_dump_json(self, indent: int = 2) -> str:
-            return json.dumps(asdict(self), indent=indent)
 
         def model_dump(self) -> Dict[str, Any]:
             return asdict(self)
+
+        def model_dump_json(self, indent: int = 2) -> str:
+            return json.dumps(asdict(self), indent=indent)
 
         @classmethod
         def model_validate_json(cls, json_str: str) -> "MakerOutput":
@@ -154,3 +145,4 @@ except ImportError:
                 maker_summary=d["maker_summary"],
                 timestamp=d["timestamp"],
             )
+

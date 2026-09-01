@@ -1,11 +1,16 @@
 .env
 node_modules/
 dist/
-.venv/
+.venv*/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.lock
+*.tmp
 .DS_Store
 backend/uploads/*
 !backend/uploads/.gitkeep
+report.md
+
+

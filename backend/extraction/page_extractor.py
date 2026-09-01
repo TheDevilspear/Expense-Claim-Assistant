@@ -133,46 +133,13 @@ def _get_easyocr_reader():
     return _EASYOCR_READER if _EASYOCR_READER is not False else None
 
 
+from extraction.pdf_utils import render_page_to_bytes
+
+
 def _render_page_to_image(file_path: str, page_profile: PageProfile):
     """Renders a PDF page or loads an image file as bytes. Returns (bytes, width, height)."""
-    import os
-    ext = os.path.splitext(file_path)[1].lower()
+    return render_page_to_bytes(file_path, page_number=page_profile.page_number, dpi=200, img_format="png")
 
-    if ext == ".pdf":
-        try:
-            import fitz
-            doc = fitz.open(file_path)
-            page = doc[page_profile.page_number]
-            pix = page.get_pixmap(dpi=200)
-            img_bytes = pix.tobytes("png")
-            w, h = pix.width, pix.height
-            doc.close()
-            return img_bytes, w, h
-        except Exception:
-            return None, 0, 0
-    else:
-        # Direct image file (.jpg, .png, .webp, etc.)
-        try:
-            with open(file_path, "rb") as f:
-                img_bytes = f.read()
-            # Try PIL / Pillow or cv2 for image dimensions
-            try:
-                from PIL import Image
-                import io
-                with Image.open(io.BytesIO(img_bytes)) as img:
-                    return img_bytes, img.width, img.height
-            except Exception:
-                pass
-            import numpy as np
-            import cv2
-            nparr = np.frombuffer(img_bytes, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if img is not None:
-                h, w = img.shape[:2]
-                return img_bytes, w, h
-        except Exception:
-            pass
-        return None, 0, 0
 
 
 def _run_ocr(img_bytes: bytes, img_width: int, img_height: int) -> List[Token]:
