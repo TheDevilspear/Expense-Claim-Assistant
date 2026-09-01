@@ -10,6 +10,11 @@ Includes automatic text-region cropping and digital vs. photo domain calibration
 import sys
 import json
 import os
+
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
 from dataclasses import dataclass, asdict
 from typing import Union, List, Optional
 import numpy as np
