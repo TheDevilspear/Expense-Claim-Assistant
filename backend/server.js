@@ -139,7 +139,7 @@ app.get('/api/health', async (req, res) => {
 
   let pythonPackages = 'unknown';
   try {
-    const { stdout } = await execFileAsync(pyBin, ['-c', 'import fitz, cv2, pydantic, numpy; print("All required packages installed OK")']);
+    const { stdout } = await execFileAsync(pyBin, ['-c', 'import pymupdf, cv2, pydantic, numpy; print("All required packages installed OK")']);
     pythonPackages = stdout.trim();
   } catch (err) {
     pythonPackages = `Error: ${err.message}`;

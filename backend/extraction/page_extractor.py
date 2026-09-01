@@ -46,9 +46,13 @@ def extract_page_evidence(file_path: str, page_profile: PageProfile) -> PageEvid
 def _extract_native_pdf_page(file_path: str, page_number: int) -> PageEvidence:
     """Extracts tokens with normalized coordinates from a native PDF page."""
     try:
-        import fitz
+        import pymupdf as fitz
     except ImportError:
-        return PageEvidence(
+        try:
+            import fitz
+        except ImportError:
+            fitz = None
+    if fitz is None:
             page_number=page_number, tokens=[], lines=[],
             raw_text="", extraction_method=ExtractionMethod.NATIVE_PDF,
         )

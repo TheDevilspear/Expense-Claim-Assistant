@@ -58,8 +58,13 @@ def inspect(file_path: str) -> DocumentProfile:
 def _inspect_pdf(file_path: str) -> DocumentProfile:
     """Inspects a PDF page-by-page using PyMuPDF."""
     try:
-        import fitz
+        import pymupdf as fitz
     except ImportError:
+        try:
+            import fitz
+        except ImportError:
+            fitz = None
+    if fitz is None:
         # If fitz is unavailable, return a minimal profile
         return DocumentProfile(
             file_type="pdf",
