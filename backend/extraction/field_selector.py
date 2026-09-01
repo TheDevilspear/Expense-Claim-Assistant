@@ -280,14 +280,16 @@ def compute_confidence(
     # 1. Explicit high-priority label exists
     if candidate.semantic_type and candidate.semantic_type != MoneySemanticType.OTHER:
         score += 0.55
+    else:
+        score += 0.40
 
     # 2. Value was spatially associated with its label
-    if any("line_match" in s or "spatial" in s for s in candidate.evidence_sources):
+    if any("line_match" in s or "spatial" in s or "regex" in s for s in candidate.evidence_sources):
         score += 0.20
 
     # 3. Native PDF text (not OCR with potential errors)
-    if extraction_method in ("native_pdf", ExtractionMethod.NATIVE_PDF):
-        score += 0.15
+    if extraction_method in ("native_pdf", ExtractionMethod.NATIVE_PDF, "native_pdf_regex", "native_pdf_line_match"):
+        score += 0.20
 
     # 4. Arithmetic reconciliation succeeded
     score += reconciliation_boost  # 0.0 or 0.15

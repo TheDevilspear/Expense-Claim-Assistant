@@ -195,18 +195,37 @@ class MakerAgent:
                         logger.debug("Could not parse vision amount value: %s", conv_err)
 
             if vendor_candidate is None:
-                vision_v = vision_arbitrator.arbitrate("telecom_vendor", all_candidates, file_path, 0)
-                if vision_v and vision_v.get("value"):
-                    vendor_candidate = Candidate(
-                        field_type=FieldType.VENDOR,
-                        value=str(vision_v["value"]),
-                        raw_text=str(vision_v["value"]),
-                        label=f"Vendor: {vision_v['value']}",
-                        page=0,
-                        confidence=0.90,
-                        evidence_sources=["vision_llm_arbitration"],
-                    )
-                    all_candidates.append(vendor_candidate)
+                # First check raw text from pages_evidence directly before external API call
+                if pages_evidence:
+                    raw_all = " ".join(p.raw_text for p in pages_evidence if p.raw_text)
+                    clean_all = raw_all.replace("_", " ").replace("-", " ")
+                    for pattern, vname, fname in VENDOR_PATTERNS:
+                        if pattern.search(clean_all):
+                            vendor_candidate = Candidate(
+                                field_type=FieldType.VENDOR,
+                                value=vname,
+                                raw_text=fname,
+                                label=f"Vendor: {vname}",
+                                page=0,
+                                confidence=0.95,
+                                evidence_sources=["raw_text_regex"],
+                            )
+                            all_candidates.append(vendor_candidate)
+                            break
+
+                if vendor_candidate is None:
+                    vision_v = vision_arbitrator.arbitrate("telecom_vendor", all_candidates, file_path, 0)
+                    if vision_v and vision_v.get("value"):
+                        vendor_candidate = Candidate(
+                            field_type=FieldType.VENDOR,
+                            value=str(vision_v["value"]),
+                            raw_text=str(vision_v["value"]),
+                            label=f"Vendor: {vision_v['value']}",
+                            page=0,
+                            confidence=0.90,
+                            evidence_sources=["vision_llm_arbitration"],
+                        )
+                        all_candidates.append(vendor_candidate)
 
         # Single canonical bill type and relevancy determination
         bill_type_value, detected_doc_type = field_selector.determine_bill_type(primary_section, all_candidates)

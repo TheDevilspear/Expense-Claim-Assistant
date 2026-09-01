@@ -31,15 +31,18 @@ from models.extraction_schema import (
 _MONEY_LABEL_MAP = {
     MoneySemanticType.TOTAL_AMOUNT_PAYABLE: [
         "total amount payable", "total amount", "total payable", "amount payable",
-        "net payable", "grand total", "total due", "amount due",
-        "total (incl", "total(incl", "total current charges", "total:",
-        "total",
+        "net payable", "grand total", "total due", "amount due", "invoice value",
+        "invoice total", "invoice amount", "bill amount", "gross amount", "net amount",
+        "total (incl", "total(incl", "total current charges", "total:", "amount:",
+        "amount (rs)", "amount (inr)", "total (rs.)", "total (inr)", "amount payable (rs.)",
+        "payable:", "due:", "total charges", "total",
     ],
     MoneySemanticType.CURRENT_BILL_AMOUNT: [
         "current bill amount", "charges for this month",
         "this month's charges", "total current charges",
         "total charges", "monthly charges total",
         "charges summary", "this month's charges summary",
+        "current charges", "bill summary",
     ],
     MoneySemanticType.PAID_AMOUNT: [
         "paid amount", "payment received", "amount paid",
