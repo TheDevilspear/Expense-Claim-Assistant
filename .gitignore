@@ -14,5 +14,5 @@ backend/uploads/*
 backend/tests/
 tests/
 report.md
-
-
+report.docx
+*.docx

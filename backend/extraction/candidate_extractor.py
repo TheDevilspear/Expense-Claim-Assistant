@@ -10,7 +10,7 @@ semantic_classifier.py and field_selector.py.
 
 import re
 from datetime import datetime
-from typing import List
+from typing import List, Optional, Tuple, Dict, Any
 from models.extraction_schema import (
     Token,
     Line,
@@ -110,100 +110,201 @@ def extract_money_candidates(evidence: PageEvidence) -> List[Candidate]:
 
 
 # ---------------------------------------------------------------------------
-# Date candidates
+# Date candidates & Validity candidates
 # ---------------------------------------------------------------------------
 
+_MONTH_NAMES = r'(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
+
 _DATE_PATTERNS = [
-    # "08 Jan 2022", "16 DEC 2024", "26 Oct 2023"
-    (re.compile(r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{2,4})', re.I),
-     lambda m: (f"{m.group(1)} {m.group(2)[:3].title()} {m.group(3)}", "%d %b %y" if len(m.group(3)) == 2 else "%d %b %Y")),
-    # "08-Jan-2022", "16-DEC-2024", "26-APR-21"
-    (re.compile(r'(\d{1,2})[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/](\d{2,4})', re.I),
-     lambda m: (f"{m.group(1)}-{m.group(2)[:3].title()}-{m.group(3)}", "%d-%b-%y" if len(m.group(3)) == 2 else "%d-%b-%Y")),
-    # "16 April 2025", "06 February 2024"
-    (re.compile(r'(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{2,4})', re.I),
-     lambda m: (f"{m.group(1)} {m.group(2).title()} {m.group(3)}", "%d %B %y" if len(m.group(3)) == 2 else "%d %B %Y")),
-    # "2024-01-05"
-    (re.compile(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})'),
-     lambda m: (f"{m.group(1)}-{m.group(2).zfill(2)}-{m.group(3).zfill(2)}", "%Y-%m-%d")),
-    # "05/01/2024", "05-01-2024" (DD/MM/YYYY)
-    (re.compile(r'(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})'),
-     lambda m: (f"{m.group(1).zfill(2)}-{m.group(2).zfill(2)}-{m.group(3)}", "%d-%m-%y" if len(m.group(3)) == 2 else "%d-%m-%Y")),
+    # "08 Jan 2022", "16 DEC 2024", "26 Oct 2023", "16 April 2025", "06 February 2024", "18 April 25", "03 Aug 21"
+    re.compile(rf'\b(\d{{1,2}})\s+({_MONTH_NAMES})\s+(\d{{4}}|\d{{2}})(?!\s*:)\b', re.I),
+    # "08-Jan-2022", "16-DEC-2024", "26-APR-21", "06-Jan-2018", "21-JAN-2023"
+    re.compile(rf'\b(\d{{1,2}})[-/\.]({_MONTH_NAMES})[-/\.](\d{{4}}|\d{{2}})(?!\s*:)\b', re.I),
+    # "Jan 08, 2022", "April 16, 2025", "Jul 05 2021"
+    re.compile(rf'\b({_MONTH_NAMES})\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s+(\d{{4}}|\d{{2}})(?!\s*:)\b', re.I),
+    # "2024-01-05", "2023/11/11", "2024.01.05"
+    re.compile(r'\b(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})\b'),
+    # "05/01/2024", "05-01-2024", "14/12/2023", "03/08/21" (DD/MM/YYYY or DD/MM/YY)
+    re.compile(r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{4}|\d{2})(?!\s*:)\b'),
 ]
+
+_DATE_RANGE_REGEX = re.compile(
+    rf'(?:Statement\s+Period|Bill\s+Period|Billing\s+Period|Billing\s+Cycle(?:\s+Date)?|Usage\s+Period|Service\s+Period|Period(?:\s+Date)?|Plan\s+Period|Validity\s+Period)[:\s]*'
+    rf'([0-9A-Za-z\s\-/\.]{{6,25}})\s*(?:to|-|till|through|–)\s*([0-9A-Za-z\s\-/\.]{{6,25}})',
+    re.I
+)
+
+_VALIDITY_PATTERNS = [
+    # "Validity: 28 Days", "Plan Validity: 84 Days", "Validity - 365 Days", "Validity: 28 days"
+    (re.compile(r'(?:plan\s+|pack\s+|tariff\s+)?validity\s*[:\-]?\s*(\d+)\s*(?:days?|day)\b', re.I), lambda m: int(m.group(1))),
+    # "28 Days Validity", "84 days validity", "365 days validity"
+    (re.compile(r'\b(\d+)\s*(?:days?|day)\s+validity\b', re.I), lambda m: int(m.group(1))),
+    # "Validity: 1 Month", "Validity: 3 Months", "Validity: 12 Months"
+    (re.compile(r'(?:plan\s+|pack\s+|tariff\s+)?validity\s*[:\-]?\s*(\d+)\s*(?:months?|month)\b', re.I), lambda m: int(m.group(1)) * 30),
+    # "Valid for 28 days", "Valid for 84 days"
+    (re.compile(r'\bvalid\s+for\s*[:\-]?\s*(\d+)\s*(?:days?|day)\b', re.I), lambda m: int(m.group(1))),
+    # "Validity: 1 Year", "Validity: 2 Years"
+    (re.compile(r'(?:plan\s+|pack\s+|tariff\s+)?validity\s*[:\-]?\s*(\d+)\s*(?:years?|year)\b', re.I), lambda m: int(m.group(1)) * 365),
+]
+
+
+def _parse_date_string(dt_str: str) -> Optional[str]:
+    """Robustly parses arbitrary telecom date strings to ISO YYYY-MM-DD format."""
+    if not dt_str:
+        return None
+    clean = dt_str.strip()
+    clean = re.sub(r'[,]', ' ', clean)
+    clean = re.sub(r'\s+', ' ', clean).strip()
+
+    formats = [
+        "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d",
+        "%d-%b-%Y", "%d %b %Y", "%d/%b/%Y", "%d.%b.%Y",
+        "%d-%B-%Y", "%d %B %Y", "%d/%B/%Y", "%d.%B.%Y",
+        "%d-%b-%y", "%d %b %y", "%d/%b/%y", "%d.%b.%y",
+        "%d-%B-%y", "%d %B %y", "%d/%B/%y", "%d.%B.%y",
+        "%b %d %Y", "%B %d %Y",
+        "%b %d %y", "%B %d %y",
+        "%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y",
+        "%d-%m-%y", "%d/%m/%y", "%d.%m.%y",
+    ]
+
+    for fmt in formats:
+        try:
+            parsed = datetime.strptime(clean, fmt)
+            if 2000 <= parsed.year <= 2099:
+                return parsed.strftime("%Y-%m-%d")
+        except Exception:
+            continue
+    return None
 
 
 def extract_date_candidates(evidence: PageEvidence) -> List[Candidate]:
     """Finds all date-like values in page evidence with their nearby labels."""
-    from datetime import datetime
-    candidates = []
+    candidates: List[Candidate] = []
     seen_values = set()
 
-    range_match = re.search(
-        r'(?:Statement\s+Period|Bill\s+Period|Billing\s+Cycle(?:\s+Date)?|Usage\s+Period|Period(?:\s+Date)?)[:\s]*'
-        r'(\d{1,2}[-\s/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-\s/]\d{2,4})\s*(?:to|-)\s*'
-        r'(\d{1,2}[-\s/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-\s/]\d{2,4})',
-        evidence.raw_text, re.I
-    )
-    if range_match:
-        for idx, (group_idx, sem_type, label_name) in enumerate([
-            (1, DateSemanticType.BILLING_PERIOD_START, "Billing Period Start"),
-            (2, DateSemanticType.BILLING_PERIOD_END, "Billing Period End"),
-        ]):
-            raw_dt = range_match.group(group_idx).strip()
-            clean_dt = raw_dt.replace("/", "-").replace(" ", "-")
-            parts = clean_dt.split("-")
-            if len(parts) == 3:
-                day, mon, yr = parts[0], parts[1][:3].title(), parts[2]
-                norm_dt = f"{day.zfill(2)}-{mon}-{yr}"
-                fmt = "%d-%b-%y" if len(yr) == 2 else "%d-%b-%Y"
-                try:
-                    iso = datetime.strptime(norm_dt, fmt).strftime("%Y-%m-%d")
+    # 1. Check multi-word date ranges (e.g. "Statement Period: 08 Jan 2022 to 07 Feb 2022")
+    search_texts = [evidence.raw_text] if evidence.raw_text else []
+    search_texts.extend([line.full_text for line in evidence.lines])
+
+    for text in search_texts:
+        for match in _DATE_RANGE_REGEX.finditer(text):
+            raw_start = match.group(1).strip()
+            raw_end = match.group(2).strip()
+            iso_start = _parse_date_string(raw_start)
+            iso_end = _parse_date_string(raw_end)
+
+            if iso_start and iso_end:
+                if iso_start not in seen_values:
                     candidates.append(Candidate(
                         field_type=FieldType.DATE,
-                        value=iso,
-                        raw_text=raw_dt,
-                        label=label_name,
+                        value=iso_start,
+                        raw_text=raw_start,
+                        label="Billing Period Start",
                         page=evidence.page_number,
-                        semantic_type=sem_type,
+                        semantic_type=DateSemanticType.BILLING_PERIOD_START,
                         confidence=0.98,
                         evidence_sources=[f"{evidence.extraction_method.value}_range_match"],
                     ))
-                    seen_values.add(iso)
-                except Exception:
-                    pass
+                    seen_values.add(iso_start)
 
-    # 2. General date scan across all lines
-    for line in evidence.lines:
+                if iso_end not in seen_values:
+                    candidates.append(Candidate(
+                        field_type=FieldType.DATE,
+                        value=iso_end,
+                        raw_text=raw_end,
+                        label="Billing Period End",
+                        page=evidence.page_number,
+                        semantic_type=DateSemanticType.BILLING_PERIOD_END,
+                        confidence=0.98,
+                        evidence_sources=[f"{evidence.extraction_method.value}_range_match"],
+                    ))
+                    seen_values.add(iso_end)
+
+    # 2. General date scan across all lines (and raw_text fallback)
+    lines_to_scan = evidence.lines if evidence.lines else [
+        Line(tokens=[], full_text=l, y_center=0.0) for l in (evidence.raw_text or "").splitlines()
+    ]
+
+    for line_idx, line in enumerate(lines_to_scan):
         line_lower = line.full_text.lower()
         # Filter out dates from legal/tax disclaimer boilerplate (e.g. "effective 1-July-17...")
-        if any(kw in line_lower for kw in ["effective", "directive", "service tax of", "replaced with", "reverse charge", "1-july-17", "01-july-17"]):
+        if any(kw in line_lower for kw in [
+            "effective", "directive", "service tax of", "replaced with",
+            "reverse charge", "1-july-17", "01-july-17", "01-jul-17"
+        ]):
             continue
 
-        for pattern, normalizer in _DATE_PATTERNS:
+        for pattern in _DATE_PATTERNS:
             for match in pattern.finditer(line.full_text):
-                try:
-                    normalized_str, fmt = normalizer(match)
-                    parsed = datetime.strptime(normalized_str, fmt)
-                    iso_date = parsed.strftime("%Y-%m-%d")
-                except (ValueError, IndexError):
+                match_raw = match.group(0).strip()
+                iso_date = _parse_date_string(match_raw)
+                if not iso_date or iso_date in seen_values:
                     continue
 
-                if iso_date in seen_values:
-                    continue
                 seen_values.add(iso_date)
 
+                # Label resolution: left of match or previous line
                 label = _extract_label_from_line(line, match.start())
+                if not label and line_idx > 0:
+                    prev_text = lines_to_scan[line_idx - 1].full_text.strip()
+                    if not re.match(r'^\d+(\.\d+)?$', prev_text):
+                        label = prev_text
+
+                # Semantic type heuristics from label
+                sem_type = DateSemanticType.OTHER_DATE
+                label_lower = label.lower()
+                if any(kw in label_lower for kw in ["bill date", "invoice date", "statement date", "date of invoice", "billing date"]):
+                    sem_type = DateSemanticType.BILL_DATE
+                elif any(kw in label_lower for kw in ["due date", "pay by", "payable by", "due on"]):
+                    sem_type = DateSemanticType.DUE_DATE
+                elif any(kw in label_lower for kw in ["payment date", "paid on", "transaction date", "recharge date"]):
+                    sem_type = DateSemanticType.PAYMENT_DATE
+                elif any(kw in label_lower for kw in ["statement period", "billing cycle", "billing period", "bill period", "service period"]):
+                    sem_type = DateSemanticType.BILLING_PERIOD_START
+                elif any(kw in label_lower for kw in ["activation date", "activated on"]):
+                    sem_type = DateSemanticType.ACTIVATION_DATE
+
                 bbox = _estimate_bbox_from_match(line, match)
 
                 candidates.append(Candidate(
                     field_type=FieldType.DATE,
                     value=iso_date,
-                    raw_text=match.group(0).strip(),
+                    raw_text=match_raw,
                     label=label,
                     page=evidence.page_number,
+                    semantic_type=sem_type,
+                    confidence=0.90 if sem_type != DateSemanticType.OTHER_DATE else 0.85,
                     x0=bbox[0], y0=bbox[1], x1=bbox[2], y1=bbox[3],
                     evidence_sources=[f"{evidence.extraction_method.value}_line_match"],
                 ))
+
+    return candidates
+
+
+def extract_validity_candidates(evidence: PageEvidence) -> List[Candidate]:
+    """Finds explicit plan validity numbers (e.g. 'Validity: 28 Days', '84 Days Validity')."""
+    candidates: List[Candidate] = []
+    search_texts = [evidence.raw_text] if evidence.raw_text else []
+    search_texts.extend([line.full_text for line in evidence.lines])
+
+    for text in search_texts:
+        for pattern, val_parser in _VALIDITY_PATTERNS:
+            for match in pattern.finditer(text):
+                try:
+                    days = val_parser(match)
+                    if 1 <= days <= 730:
+                        candidates.append(Candidate(
+                            field_type=FieldType.VALIDITY,
+                            value=days,
+                            raw_text=match.group(0).strip(),
+                            label="Plan Validity",
+                            page=evidence.page_number,
+                            confidence=0.95,
+                            evidence_sources=[f"{evidence.extraction_method.value}_validity_regex"],
+                        ))
+                except Exception:
+                    continue
 
     return candidates
 
@@ -305,6 +406,7 @@ def extract_candidates(evidence: PageEvidence) -> List[Candidate]:
     candidates = []
     candidates += extract_money_candidates(evidence)
     candidates += extract_date_candidates(evidence)
+    candidates += extract_validity_candidates(evidence)
     candidates += extract_identifier_candidates(evidence)
     candidates += extract_vendor_candidates(evidence)
     return candidates

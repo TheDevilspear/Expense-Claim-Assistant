@@ -247,48 +247,206 @@ class CheckerAgent:
             )
 
         # -------------------------------------------------------------
-        # 5. Billing Period Match Check
+        # 5. Billing Period & Validity Match Check
         # -------------------------------------------------------------
-        inv_start = extracted.billing_start_date.value
+        inv_start = extracted.billing_start_date.value or extracted.bill_date.value
         inv_end = extracted.billing_end_date.value
+        inv_validity = extracted.validity_days.value
         claimed_start = claimed.claimed_start_date
         claimed_end = claimed.claimed_end_date
+        claimed_validity = claimed.claimed_validity_days
+        tolerance = policy.BILLING_DATE_TOLERANCE_DAYS
 
-        if extracted.billing_start_date.confidence < self.confidence_threshold:
+        # Step 1: Validate claimed dates validity
+        try:
+            c_start_dt = datetime.strptime(claimed_start, "%Y-%m-%d") if claimed_start else None
+            c_end_dt = datetime.strptime(claimed_end, "%Y-%m-%d") if claimed_end else None
+        except Exception:
+            c_start_dt = None
+            c_end_dt = None
+
+        if not c_start_dt or not c_end_dt:
             self._add_check(
                 checks,
                 check_id="BILLING_PERIOD_MATCH",
                 check_name="Billing Period Cross-Check",
-                status=CheckStatus.PASS,
-                confidence=extracted.billing_start_date.confidence,
+                status=CheckStatus.FAIL_MISMATCH,
+                confidence=1.0,
                 claimed_value=f"{claimed_start} to {claimed_end}",
-                extracted_value="Inferred dates",
-                reason=f"Claimed period ({claimed_start} to {claimed_end}) accepted based on {claimed.claimed_validity_days} days validity.",
-                is_blocking=False,
+                extracted_value=f"{inv_start} to {inv_end}" if inv_end else f"{inv_start}",
+                reason="Invalid Claim Dates: Billing start date and end date must be provided in valid ISO date format.",
+                is_blocking=True,
             )
-        elif inv_start and not inv_end:
+        elif c_end_dt < c_start_dt:
             self._add_check(
                 checks,
                 check_id="BILLING_PERIOD_MATCH",
                 check_name="Billing Period Cross-Check",
-                status=CheckStatus.PASS,
+                status=CheckStatus.FAIL_MISMATCH,
+                confidence=1.0,
+                claimed_value=f"{claimed_start} to {claimed_end}",
+                extracted_value=f"{inv_start} to {inv_end}" if inv_end else f"{inv_start}",
+                reason=f"Date Inversion: Claimed end date ({claimed_end}) cannot precede start date ({claimed_start}).",
+                is_blocking=True,
+            )
+        elif extracted.is_blurry_or_unreadable or (extracted.billing_start_date.confidence < self.confidence_threshold and extracted.bill_date.confidence < self.confidence_threshold and not inv_start):
+            self._add_check(
+                checks,
+                check_id="BILLING_PERIOD_MATCH",
+                check_name="Billing Period Cross-Check",
+                status=CheckStatus.FLAGGED_LOW_CONFIDENCE,
                 confidence=extracted.billing_start_date.confidence,
                 claimed_value=f"{claimed_start} to {claimed_end}",
-                extracted_value=f"Recharge Date: {inv_start}",
-                reason=f"Recharge date ({inv_start}) matches claimed period start ({claimed_start}) with {claimed.claimed_validity_days} days validity.",
-                is_blocking=False,
+                extracted_value="Uncertain dates",
+                reason=f"Billing dates could not be verified from the document with high confidence ({extracted.billing_start_date.confidence:.2f}).",
+                is_blocking=True,
             )
+        elif inv_start and inv_end:
+            try:
+                i_start_dt = datetime.strptime(str(inv_start), "%Y-%m-%d")
+                i_end_dt = datetime.strptime(str(inv_end), "%Y-%m-%d")
+                start_diff = abs((c_start_dt - i_start_dt).days)
+                end_diff = abs((c_end_dt - i_end_dt).days)
+
+                if start_diff > tolerance:
+                    self._add_check(
+                        checks,
+                        check_id="BILLING_PERIOD_MATCH",
+                        check_name="Billing Period Cross-Check",
+                        status=CheckStatus.FAIL_MISMATCH,
+                        confidence=extracted.billing_start_date.confidence,
+                        claimed_value=f"{claimed_start} to {claimed_end}",
+                        extracted_value=f"{inv_start} to {inv_end}",
+                        reason=f"Date Mismatch: Claimed start date ({claimed_start}) differs from invoice period start ({inv_start}) by {start_diff} days (tolerance: {tolerance} days).",
+                        is_blocking=True,
+                    )
+                elif end_diff > tolerance:
+                    self._add_check(
+                        checks,
+                        check_id="BILLING_PERIOD_MATCH",
+                        check_name="Billing Period Cross-Check",
+                        status=CheckStatus.FAIL_MISMATCH,
+                        confidence=extracted.billing_end_date.confidence or extracted.billing_start_date.confidence,
+                        claimed_value=f"{claimed_start} to {claimed_end}",
+                        extracted_value=f"{inv_start} to {inv_end}",
+                        reason=f"Date Mismatch: Claimed end date ({claimed_end}) differs from invoice period end ({inv_end}) by {end_diff} days (tolerance: {tolerance} days).",
+                        is_blocking=True,
+                    )
+                else:
+                    self._add_check(
+                        checks,
+                        check_id="BILLING_PERIOD_MATCH",
+                        check_name="Billing Period Cross-Check",
+                        status=CheckStatus.PASS,
+                        confidence=extracted.billing_start_date.confidence,
+                        claimed_value=f"{claimed_start} to {claimed_end}",
+                        extracted_value=f"{inv_start} to {inv_end}",
+                        reason=f"Claimed billing period ({claimed_start} to {claimed_end}) aligns with invoice billing cycle ({inv_start} to {inv_end}).",
+                        is_blocking=False,
+                    )
+            except Exception as e:
+                self._add_check(
+                    checks,
+                    check_id="BILLING_PERIOD_MATCH",
+                    check_name="Billing Period Cross-Check",
+                    status=CheckStatus.FLAGGED_LOW_CONFIDENCE,
+                    confidence=0.5,
+                    claimed_value=f"{claimed_start} to {claimed_end}",
+                    extracted_value=f"{inv_start} to {inv_end}",
+                    reason=f"Date parsing error during cross-check: {e}",
+                    is_blocking=True,
+                )
+        elif inv_start:
+            # Single-date transaction (e.g. prepaid recharge, payment receipt)
+            try:
+                i_start_dt = datetime.strptime(str(inv_start), "%Y-%m-%d")
+                start_diff = abs((c_start_dt - i_start_dt).days)
+
+                if start_diff > tolerance:
+                    self._add_check(
+                        checks,
+                        check_id="BILLING_PERIOD_MATCH",
+                        check_name="Billing Period Cross-Check",
+                        status=CheckStatus.FAIL_MISMATCH,
+                        confidence=extracted.billing_start_date.confidence or extracted.bill_date.confidence,
+                        claimed_value=f"{claimed_start} to {claimed_end}",
+                        extracted_value=f"Recharge Date: {inv_start}",
+                        reason=f"Date Mismatch: Claimed start date ({claimed_start}) does not match recharge/invoice date ({inv_start}). Diff: {start_diff} days (tolerance: {tolerance} days).",
+                        is_blocking=True,
+                    )
+                elif inv_validity is not None and isinstance(inv_validity, int):
+                    val_diff = abs(claimed_validity - inv_validity)
+                    if val_diff > tolerance:
+                        self._add_check(
+                            checks,
+                            check_id="BILLING_PERIOD_MATCH",
+                            check_name="Billing Period Cross-Check",
+                            status=CheckStatus.FAIL_MISMATCH,
+                            confidence=extracted.validity_days.confidence,
+                            claimed_value=f"{claimed_validity} days ({claimed_start} to {claimed_end})",
+                            extracted_value=f"{inv_validity} days plan validity",
+                            reason=f"Validity Period Mismatch: User claimed {claimed_validity} days validity, but invoice plan specifies {inv_validity} days validity (Diff: {val_diff} days).",
+                            is_blocking=True,
+                        )
+                    else:
+                        self._add_check(
+                            checks,
+                            check_id="BILLING_PERIOD_MATCH",
+                            check_name="Billing Period Cross-Check",
+                            status=CheckStatus.PASS,
+                            confidence=extracted.billing_start_date.confidence or extracted.bill_date.confidence,
+                            claimed_value=f"{claimed_start} to {claimed_end}",
+                            extracted_value=f"Recharge Date: {inv_start} ({inv_validity} Days)",
+                            reason=f"Recharge date ({inv_start}) matches claimed start date with {inv_validity} days plan validity.",
+                            is_blocking=False,
+                        )
+                elif claimed_validity > 365:
+                    self._add_check(
+                        checks,
+                        check_id="BILLING_PERIOD_MATCH",
+                        check_name="Billing Period Cross-Check",
+                        status=CheckStatus.FAIL_POLICY_VIOLATION,
+                        confidence=1.0,
+                        claimed_value=f"{claimed_validity} days",
+                        extracted_value="Max 365 days allowed",
+                        reason=f"Validity Period Exceeded: Claimed validity of {claimed_validity} days exceeds maximum allowable period (365 days).",
+                        is_blocking=True,
+                    )
+                else:
+                    self._add_check(
+                        checks,
+                        check_id="BILLING_PERIOD_MATCH",
+                        check_name="Billing Period Cross-Check",
+                        status=CheckStatus.PASS,
+                        confidence=extracted.billing_start_date.confidence or extracted.bill_date.confidence,
+                        claimed_value=f"{claimed_start} to {claimed_end}",
+                        extracted_value=f"Recharge Date: {inv_start}",
+                        reason=f"Recharge date ({inv_start}) matches claimed period start ({claimed_start}) with {claimed_validity} days validity.",
+                        is_blocking=False,
+                    )
+            except Exception as e:
+                self._add_check(
+                    checks,
+                    check_id="BILLING_PERIOD_MATCH",
+                    check_name="Billing Period Cross-Check",
+                    status=CheckStatus.FLAGGED_LOW_CONFIDENCE,
+                    confidence=0.5,
+                    claimed_value=f"{claimed_start} to {claimed_end}",
+                    extracted_value=f"Recharge Date: {inv_start}",
+                    reason=f"Date parsing error: {e}",
+                    is_blocking=True,
+                )
         else:
             self._add_check(
                 checks,
                 check_id="BILLING_PERIOD_MATCH",
                 check_name="Billing Period Cross-Check",
-                status=CheckStatus.PASS,
-                confidence=extracted.billing_start_date.confidence,
+                status=CheckStatus.FLAGGED_LOW_CONFIDENCE,
+                confidence=0.0,
                 claimed_value=f"{claimed_start} to {claimed_end}",
-                extracted_value=f"{inv_start} to {inv_end}",
-                reason=f"Claimed billing period ({claimed_start} to {claimed_end}) aligns with invoice billing cycle.",
-                is_blocking=False,
+                extracted_value="Missing document dates",
+                reason="No valid billing or transaction dates could be extracted from the invoice.",
+                is_blocking=True,
             )
 
         # -------------------------------------------------------------

@@ -45,6 +45,10 @@ class TestApproverAgentScenarios(unittest.TestCase):
         maker_out.extracted_invoice.vendor_name.confidence = 0.95
         maker_out.extracted_invoice.total_amount_inr.value = 799.00
         maker_out.extracted_invoice.total_amount_inr.confidence = 0.98
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = "2026-08-28"
+        maker_out.extracted_invoice.billing_end_date.confidence = 0.95
         maker_out.extracted_invoice.detected_document_type = "BROADBAND_FIBER_BILL"
         maker_out.extracted_invoice.bill_type.value = "BROADBAND_PLAN"
         maker_out.extracted_invoice.bill_type.confidence = 0.95
@@ -70,6 +74,10 @@ class TestApproverAgentScenarios(unittest.TestCase):
         maker_out.extracted_invoice.vendor_name.confidence = 0.95
         maker_out.extracted_invoice.total_amount_inr.value = 950.00
         maker_out.extracted_invoice.total_amount_inr.confidence = 0.98
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = "2026-08-28"
+        maker_out.extracted_invoice.billing_end_date.confidence = 0.95
         maker_out.extracted_invoice.detected_document_type = "BROADBAND_FIBER_BILL"
         maker_out.extracted_invoice.bill_type.value = "BROADBAND_PLAN"
         maker_out.extracted_invoice.bill_type.confidence = 0.95
@@ -128,6 +136,10 @@ class TestApproverAgentScenarios(unittest.TestCase):
         maker_out.extracted_invoice.invoice_or_account_number.confidence = 0.95
         maker_out.extracted_invoice.total_amount_inr.value = 799.00
         maker_out.extracted_invoice.total_amount_inr.confidence = 0.95
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = "2026-08-28"
+        maker_out.extracted_invoice.billing_end_date.confidence = 0.95
         maker_out.extracted_invoice.detected_document_type = "BROADBAND_FIBER_BILL"
         maker_out.extracted_invoice.bill_type.value = "BROADBAND_PLAN"
         maker_out.extracted_invoice.bill_type.confidence = 0.95
@@ -150,6 +162,10 @@ class TestApproverAgentScenarios(unittest.TestCase):
         maker_out = self.maker.process("CLM-SCENARIO-5", "airtel_bill_799.pdf", claim)
         maker_out.extracted_invoice.total_amount_inr.value = 6500.00
         maker_out.extracted_invoice.total_amount_inr.confidence = 0.98
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = "2026-08-28"
+        maker_out.extracted_invoice.billing_end_date.confidence = 0.95
 
         checker_rep = self.checker.process(maker_out)
         decision = self.approver.process(maker_out, checker_rep)
@@ -171,6 +187,10 @@ class TestApproverAgentScenarios(unittest.TestCase):
         maker_out.extracted_invoice.vendor_name.confidence = 0.95
         maker_out.extracted_invoice.total_amount_inr.value = 1178.82
         maker_out.extracted_invoice.total_amount_inr.confidence = 0.98
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = "2026-08-28"
+        maker_out.extracted_invoice.billing_end_date.confidence = 0.95
         maker_out.extracted_invoice.detected_document_type = "BROADBAND_FIBER_BILL"
         maker_out.extracted_invoice.bill_type.value = "BROADBAND_PLAN"
         maker_out.extracted_invoice.bill_type.confidence = 0.95
@@ -182,6 +202,35 @@ class TestApproverAgentScenarios(unittest.TestCase):
         self.assertTrue(decision.requires_human_action)
         self.assertIn("CATEGORY_MISMATCH", decision.escalation_tags)
         self.assertIn("Category Mismatch", decision.actionable_user_reason)
+
+    def test_scenario_7_billing_date_mismatch_escalation(self):
+        """Scenario 7: Date mismatch -> ESCALATE_TO_HUMAN (BILLING_PERIOD_MISMATCH)."""
+        claim = {
+            "claimedAmountINR": 799.00,
+            "category": "broadband",
+            "startDate": "2026-09-01",
+            "endDate": "2026-09-28",
+        }
+        maker_out = self.maker.process("CLM-SCENARIO-7", "airtel_broadband.pdf", claim)
+        maker_out.extracted_invoice.vendor_name.value = "Airtel"
+        maker_out.extracted_invoice.vendor_name.confidence = 0.95
+        maker_out.extracted_invoice.total_amount_inr.value = 799.00
+        maker_out.extracted_invoice.total_amount_inr.confidence = 0.98
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = "2026-08-28"
+        maker_out.extracted_invoice.billing_end_date.confidence = 0.95
+        maker_out.extracted_invoice.detected_document_type = "BROADBAND_FIBER_BILL"
+        maker_out.extracted_invoice.bill_type.value = "BROADBAND_PLAN"
+        maker_out.extracted_invoice.bill_type.confidence = 0.95
+
+        checker_rep = self.checker.process(maker_out)
+        decision = self.approver.process(maker_out, checker_rep)
+
+        self.assertEqual(decision.decision, ApprovalDecisionType.ESCALATE_TO_HUMAN)
+        self.assertTrue(decision.requires_human_action)
+        self.assertIn("BILLING_PERIOD_MISMATCH", decision.escalation_tags)
+        self.assertIn("Billing Period Mismatch", decision.actionable_user_reason)
 
 
 if __name__ == "__main__":

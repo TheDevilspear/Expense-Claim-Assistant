@@ -41,6 +41,10 @@ class TestCheckerAgent(unittest.TestCase):
         maker_out.extracted_invoice.vendor_name.confidence = 0.95
         maker_out.extracted_invoice.total_amount_inr.value = 799.00
         maker_out.extracted_invoice.total_amount_inr.confidence = 0.98
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = "2026-08-28"
+        maker_out.extracted_invoice.billing_end_date.confidence = 0.95
         maker_out.extracted_invoice.detected_document_type = "BROADBAND_FIBER_BILL"
         maker_out.extracted_invoice.bill_type.value = "BROADBAND_PLAN"
         maker_out.extracted_invoice.bill_type.confidence = 0.95
@@ -68,6 +72,10 @@ class TestCheckerAgent(unittest.TestCase):
         maker_out.extracted_invoice.vendor_name.confidence = 0.95
         maker_out.extracted_invoice.total_amount_inr.value = 950.00
         maker_out.extracted_invoice.total_amount_inr.confidence = 0.98
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = "2026-08-28"
+        maker_out.extracted_invoice.billing_end_date.confidence = 0.95
         maker_out.extracted_invoice.detected_document_type = "BROADBAND_FIBER_BILL"
         maker_out.extracted_invoice.bill_type.value = "BROADBAND_PLAN"
         maker_out.extracted_invoice.bill_type.confidence = 0.95
@@ -127,6 +135,10 @@ class TestCheckerAgent(unittest.TestCase):
         maker_out.extracted_invoice.invoice_or_account_number.confidence = 0.95
         maker_out.extracted_invoice.total_amount_inr.value = 799.00
         maker_out.extracted_invoice.total_amount_inr.confidence = 0.98
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = "2026-08-28"
+        maker_out.extracted_invoice.billing_end_date.confidence = 0.95
         maker_out.extracted_invoice.detected_document_type = "BROADBAND_FIBER_BILL"
         maker_out.extracted_invoice.bill_type.value = "BROADBAND_PLAN"
         maker_out.extracted_invoice.bill_type.confidence = 0.95
@@ -153,6 +165,10 @@ class TestCheckerAgent(unittest.TestCase):
         maker_out.extracted_invoice.vendor_name.confidence = 0.95
         maker_out.extracted_invoice.total_amount_inr.value = 1178.82
         maker_out.extracted_invoice.total_amount_inr.confidence = 0.98
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = "2026-08-28"
+        maker_out.extracted_invoice.billing_end_date.confidence = 0.95
         maker_out.extracted_invoice.detected_document_type = "BROADBAND_FIBER_BILL"
         maker_out.extracted_invoice.bill_type.value = "BROADBAND_PLAN"
         maker_out.extracted_invoice.bill_type.confidence = 0.95
@@ -165,6 +181,68 @@ class TestCheckerAgent(unittest.TestCase):
         cat_check = next(c for c in report.checks if c.check_id == "POLICY_PLAN_TYPE")
         self.assertEqual(cat_check.status, CheckStatus.FAIL_MISMATCH)
         self.assertIn("Category Mismatch", cat_check.reason)
+
+    def test_scenario_6_billing_date_mismatch(self):
+        """Scenario 6: Claimed dates differ from invoice dates triggers FAIL_MISMATCH."""
+        claim_input = {
+            "claimedAmountINR": 799.00,
+            "category": "broadband",
+            "startDate": "2026-09-01",  # Different month!
+            "endDate": "2026-09-28",
+        }
+        maker_out = self.maker.process("CLM-SCENARIO-6", "airtel_broadband.pdf", claim_input)
+        maker_out.extracted_invoice.vendor_name.value = "Airtel"
+        maker_out.extracted_invoice.vendor_name.confidence = 0.95
+        maker_out.extracted_invoice.total_amount_inr.value = 799.00
+        maker_out.extracted_invoice.total_amount_inr.confidence = 0.98
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = "2026-08-28"
+        maker_out.extracted_invoice.billing_end_date.confidence = 0.95
+        maker_out.extracted_invoice.detected_document_type = "BROADBAND_FIBER_BILL"
+        maker_out.extracted_invoice.bill_type.value = "BROADBAND_PLAN"
+        maker_out.extracted_invoice.bill_type.confidence = 0.95
+
+        report = self.checker.process(maker_out)
+
+        self.assertFalse(report.all_checks_passed)
+        self.assertTrue(report.has_mismatch)
+
+        date_check = next(c for c in report.checks if c.check_id == "BILLING_PERIOD_MATCH")
+        self.assertEqual(date_check.status, CheckStatus.FAIL_MISMATCH)
+        self.assertIn("Date Mismatch", date_check.reason)
+
+    def test_scenario_7_validity_period_mismatch(self):
+        """Scenario 7: User claims 84 days validity on a 28-day plan triggers FAIL_MISMATCH."""
+        claim_input = {
+            "claimedAmountINR": 299.00,
+            "category": "cellphone",
+            "startDate": "2026-08-01",
+            "endDate": "2026-10-23",  # 84 days
+            "validityPeriod": "84",
+        }
+        maker_out = self.maker.process("CLM-SCENARIO-7", "airtel_prepaid.pdf", claim_input)
+        maker_out.extracted_invoice.vendor_name.value = "Airtel"
+        maker_out.extracted_invoice.vendor_name.confidence = 0.95
+        maker_out.extracted_invoice.total_amount_inr.value = 299.00
+        maker_out.extracted_invoice.total_amount_inr.confidence = 0.98
+        maker_out.extracted_invoice.billing_start_date.value = "2026-08-01"
+        maker_out.extracted_invoice.billing_start_date.confidence = 0.95
+        maker_out.extracted_invoice.billing_end_date.value = None
+        maker_out.extracted_invoice.validity_days.value = 28
+        maker_out.extracted_invoice.validity_days.confidence = 0.95
+        maker_out.extracted_invoice.detected_document_type = "CELLPHONE_PREPAID_RECHARGE"
+        maker_out.extracted_invoice.bill_type.value = "PREPAID_RECHARGE"
+        maker_out.extracted_invoice.bill_type.confidence = 0.95
+
+        report = self.checker.process(maker_out)
+
+        self.assertFalse(report.all_checks_passed)
+        self.assertTrue(report.has_mismatch)
+
+        val_check = next(c for c in report.checks if c.check_id == "BILLING_PERIOD_MATCH")
+        self.assertEqual(val_check.status, CheckStatus.FAIL_MISMATCH)
+        self.assertIn("Validity Period Mismatch", val_check.reason)
 
 
 if __name__ == "__main__":

@@ -84,29 +84,31 @@ _MONEY_LABEL_MAP = {
 
 _DATE_LABEL_MAP = {
     DateSemanticType.BILLING_PERIOD_START: [
-        "statement period", "billing cycle", "billing period",
-        "bill period", "service period",
+        "statement period start", "billing cycle start", "billing period start",
+        "period start", "statement period", "billing cycle", "billing period",
+        "bill period", "service period", "usage period", "plan period",
     ],
     DateSemanticType.BILLING_PERIOD_END: [
-        # These are typically extracted as part of a "X to Y" range
-        # The classifier handles ranges specially below
+        "statement period end", "billing cycle end", "billing period end",
+        "period end", "billing end date", "valid till", "valid upto",
+        "valid until", "expiry date", "expiration date",
     ],
     DateSemanticType.BILL_DATE: [
         "bill date", "invoice date", "statement date",
-        "date of invoice", "billing date",
+        "date of invoice", "billing date", "date of issue", "issue date",
     ],
     DateSemanticType.DUE_DATE: [
-        "due date", "payment due", "pay by", "payable by",
+        "due date", "payment due", "pay by", "payable by", "due on",
     ],
     DateSemanticType.PAYMENT_DATE: [
         "payment date", "paid on", "transaction date",
-        "date of payment",
+        "date of payment", "recharge date", "recharge time",
     ],
     DateSemanticType.ACTIVATION_DATE: [
-        "activation date", "activated on", "start date",
+        "activation date", "activated on", "start date", "installation date",
     ],
     DateSemanticType.TRANSACTION_TIMESTAMP: [
-        "transaction date", "transaction time",
+        "transaction timestamp", "transaction date & time",
     ],
 }
 
@@ -119,12 +121,17 @@ def classify(candidate: Candidate) -> None:
     if candidate.field_type == FieldType.MONEY:
         candidate.semantic_type = _classify_money(candidate)
     elif candidate.field_type == FieldType.DATE:
-        candidate.semantic_type = _classify_date(candidate)
+        # If candidate was already explicitly classified from range matching, preserve it
+        if candidate.semantic_type in (DateSemanticType.BILLING_PERIOD_START, DateSemanticType.BILLING_PERIOD_END):
+            return
+        detected_sem = _classify_date(candidate)
+        if detected_sem != DateSemanticType.OTHER_DATE or candidate.semantic_type is None:
+            candidate.semantic_type = detected_sem
     elif candidate.field_type == FieldType.IDENTIFIER:
         # Already classified during extraction (label contains the type)
         if candidate.semantic_type is None:
             candidate.semantic_type = IdentifierSemanticType.OTHER_ID
-    # VENDOR candidates don't need further classification
+    # VENDOR and VALIDITY candidates don't need further classification
 
 
 def classify_all(candidates: List[Candidate]) -> None:

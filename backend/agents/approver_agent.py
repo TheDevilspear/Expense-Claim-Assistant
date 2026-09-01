@@ -151,18 +151,53 @@ class ApproverAgent:
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
 
-        # Case 2b: Category Mismatch
+        # Case 2b: Field Mismatch (Billing Period, Category, or Amount)
         if checker_report.has_mismatch:
-            cat_claimed = claimed.claimed_category.capitalize()
-            doc_type_label = extracted.detected_document_type.replace('_', ' ').title()
+            # Check if billing period / date mismatch
+            date_mismatch = next(
+                (c for c in checker_report.checks if c.check_id == "BILLING_PERIOD_MATCH" and c.status == CheckStatus.FAIL_MISMATCH),
+                None,
+            )
+            cat_mismatch = next(
+                (c for c in checker_report.checks if c.check_id == "POLICY_PLAN_TYPE" and c.status == CheckStatus.FAIL_MISMATCH),
+                None,
+            )
+            amt_mismatch = next(
+                (c for c in checker_report.checks if c.check_id == "AMOUNT_MATCH" and c.status == CheckStatus.FAIL_MISMATCH),
+                None,
+            )
+
+            if date_mismatch:
+                user_msg = f"Billing Period Mismatch: {date_mismatch.reason}"
+                internal_msg = f"Escalated due to billing period / validity mismatch: {date_mismatch.reason}"
+                tag = "BILLING_PERIOD_MISMATCH"
+                score = 0.70
+            elif cat_mismatch:
+                cat_claimed = claimed.claimed_category.capitalize()
+                doc_type_label = extracted.detected_document_type.replace('_', ' ').title()
+                user_msg = f"Category Mismatch: Claimed as {cat_claimed} Expense, but receipt is for a {doc_type_label}."
+                internal_msg = f"Escalated due to service category mismatch: Claimed {cat_claimed} vs Detected {doc_type_label}."
+                tag = "CATEGORY_MISMATCH"
+                score = 0.65
+            elif amt_mismatch:
+                user_msg = f"Amount Mismatch: {amt_mismatch.reason}"
+                internal_msg = f"Escalated due to amount mismatch: {amt_mismatch.reason}"
+                tag = "AMOUNT_MISMATCH"
+                score = 0.70
+            else:
+                user_msg = "Manual Review: One or more claim fields do not match the invoice details."
+                internal_msg = "Escalated due to unverified field discrepancy against document."
+                tag = "FIELD_MISMATCH"
+                score = 0.65
+
             return ApproverDecision(
                 claim_id=claim_id,
                 decision=ApprovalDecisionType.ESCALATE_TO_HUMAN,
                 approved_amount_inr=None,
-                actionable_user_reason=f"Category Mismatch: Claimed as {cat_claimed} Expense, but receipt is for a {doc_type_label}.",
-                internal_rationale=f"Escalated due to service category mismatch: Claimed {cat_claimed} vs Detected {doc_type_label}.",
-                risk_score=0.65,
-                escalation_tags=["CATEGORY_MISMATCH"],
+                actionable_user_reason=user_msg,
+                internal_rationale=internal_msg,
+                risk_score=score,
+                escalation_tags=[tag],
                 requires_human_action=True,
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )

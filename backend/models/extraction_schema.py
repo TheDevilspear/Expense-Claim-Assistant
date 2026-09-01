@@ -35,6 +35,7 @@ class FieldType(str, Enum):
     DATE = "date"
     IDENTIFIER = "identifier"
     VENDOR = "vendor"
+    VALIDITY = "validity"
 
 
 class MoneySemanticType(str, Enum):

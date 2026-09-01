@@ -76,17 +76,54 @@ class MakerAgent:
         category = str(claim_input.get("category", "cellphone")).lower()
         std_category = "broadband" if any(kw in category for kw in BROADBAND_CATEGORY_KEYWORDS) else "cellphone"
 
-        start_date = str(claim_input.get("startDate") or claim_input.get("start_date") or "").strip()
-        end_date = str(claim_input.get("endDate") or claim_input.get("end_date") or "").strip()
+        raw_start = str(claim_input.get("startDate") or claim_input.get("start_date") or "").strip()
+        raw_end = str(claim_input.get("endDate") or claim_input.get("end_date") or "").strip()
+        raw_validity = str(claim_input.get("validityPeriod") or claim_input.get("validity") or claim_input.get("validity_days") or "").strip()
 
+        start_date = ""
+        end_date = ""
+
+        # Normalize start_date
+        if raw_start:
+            for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y", "%d %b %Y", "%d-%b-%Y", "%d %B %Y", "%d-%b-%y"]:
+                try:
+                    start_date = datetime.strptime(raw_start, fmt).strftime("%Y-%m-%d")
+                    break
+                except Exception:
+                    continue
+            if not start_date:
+                start_date = raw_start
+
+        # Normalize end_date
+        if raw_end:
+            for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y", "%d %b %Y", "%d-%b-%Y", "%d %B %Y", "%d-%b-%y"]:
+                try:
+                    end_date = datetime.strptime(raw_end, fmt).strftime("%Y-%m-%d")
+                    break
+                except Exception:
+                    continue
+            if not end_date:
+                end_date = raw_end
+
+        # Determine validity days
         validity_days = 28
+        if raw_validity:
+            m_v = re.search(r'(\d+)', raw_validity)
+            if m_v:
+                parsed_v = int(m_v.group(1))
+                if "month" in raw_validity.lower():
+                    parsed_v *= 30
+                elif "year" in raw_validity.lower():
+                    parsed_v *= 365
+                validity_days = max(1, parsed_v)
+
         if start_date and end_date:
             try:
                 d1 = datetime.strptime(start_date, "%Y-%m-%d")
                 d2 = datetime.strptime(end_date, "%Y-%m-%d")
                 validity_days = max(1, (d2 - d1).days + 1)
             except Exception:
-                validity_days = 28
+                pass
 
         return CleanedClaim(
             claimed_amount_inr=round(raw_amount, 2),
@@ -253,7 +290,7 @@ class MakerAgent:
             bill_date=self._to_field_extraction(bill_date_c, "bill date"),
             billing_start_date=self._to_field_extraction(start_date_c, "billing start date"),
             billing_end_date=self._to_field_extraction(end_date_c, "billing end date"),
-            validity_days=self._compute_validity(start_date_c, end_date_c),
+            validity_days=self._compute_validity(start_date_c, end_date_c, all_candidates),
             total_amount_inr=self._to_field_extraction(amount_candidate, "total amount"),
             bill_type=FieldExtraction(
                 value=bill_type_value,
@@ -289,8 +326,13 @@ class MakerAgent:
             ),
         )
 
-    def _compute_validity(self, start_c: Optional[Candidate], end_c: Optional[Candidate]) -> FieldExtraction:
-        """Computes validity days from start and end date candidates."""
+    def _compute_validity(
+        self,
+        start_c: Optional[Candidate],
+        end_c: Optional[Candidate],
+        candidates: Optional[List[Candidate]] = None,
+    ) -> FieldExtraction:
+        """Computes validity days from start/end candidates or explicit validity candidates."""
         if start_c and end_c and start_c.value and end_c.value:
             try:
                 d1 = datetime.strptime(str(start_c.value), "%Y-%m-%d")
@@ -304,11 +346,23 @@ class MakerAgent:
                 )
             except Exception:
                 pass
+
+        if candidates:
+            val_cands = [c for c in candidates if c.field_type == FieldType.VALIDITY and isinstance(c.value, int)]
+            if val_cands:
+                best_v = val_cands[0]
+                return FieldExtraction(
+                    value=best_v.value,
+                    raw_text=best_v.raw_text,
+                    confidence=best_v.confidence,
+                    explanation=f"Extracted from document plan validity: {best_v.value} days",
+                )
+
         return FieldExtraction(
             value=None,
             raw_text=None,
             confidence=0.0,
-            explanation="Billing period dates not available to compute validity",
+            explanation="Billing period dates / validity not available in document",
         )
 
     def _extract_ir_charges(self, candidates: List[Candidate]) -> Optional[FieldExtraction]:
