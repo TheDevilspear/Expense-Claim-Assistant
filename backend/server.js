@@ -131,8 +131,32 @@ async function runFullMultiAgentPipeline(claimId, filePath, userClaimInput, blur
   }
 }
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+app.get('/api/health', async (req, res) => {
+  const pyBin = await getPythonExecutable();
+  const hasApiKey = Boolean(process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY.trim());
+  const visionModel = process.env.VISION_MODEL || 'nvidia/nemotron-nano-12b-v2-vl:free';
+  const baseUrl = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+
+  let pythonPackages = 'unknown';
+  try {
+    const { stdout } = await execFileAsync(pyBin, ['-c', 'import fitz, cv2, pydantic, numpy; print("All required packages installed OK")']);
+    pythonPackages = stdout.trim();
+  } catch (err) {
+    pythonPackages = `Error: ${err.message}`;
+  }
+
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    diagnostics: {
+      pythonExecutable: pyBin,
+      pythonPackages,
+      openrouterApiKeySet: hasApiKey,
+      visionModel,
+      openrouterBaseUrl: baseUrl,
+      uploadsDirWritable: fs.existsSync(UPLOAD_DIR),
+    },
+  });
 });
 
 app.get('/api/claims', (req, res) => {

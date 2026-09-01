@@ -72,9 +72,18 @@ def arbitrate(
         logger.debug("OpenRouter API key not configured; skipping vision arbitration.")
         return None
 
-    model = config.get_vision_model()
-    base_url = config.get_base_url()
-    timeout = config.get_timeout()
+    # Normalize endpoint URL
+    clean_base = base_url.strip().rstrip("/")
+    if clean_base.endswith("/chat/completions"):
+        endpoint_url = clean_base
+    elif clean_base.endswith("/v1"):
+        endpoint_url = f"{clean_base}/chat/completions"
+    elif clean_base.endswith("/api"):
+        endpoint_url = f"{clean_base}/v1/chat/completions"
+    elif "openrouter.ai" in clean_base and "/v1" not in clean_base:
+        endpoint_url = f"{clean_base}/api/v1/chat/completions"
+    else:
+        endpoint_url = f"{clean_base}/chat/completions"
 
     # Render the specific page as a data URI
     image_data_uri = render_page_to_data_uri(file_path, page_number)
@@ -85,82 +94,88 @@ def arbitrate(
     # Build targeted prompt
     prompt = _build_targeted_prompt(field_name, candidates)
 
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a precise document field extractor for telecom invoices. "
-                    "Answer ONLY the specific question asked. Return valid JSON."
-                ),
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_data_uri}},
-                ],
-            },
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.1,
-    }
+    candidate_models = [model]
+    # Free fallback vision models on OpenRouter in case primary is unavailable/404
+    fallback_pool = [
+        "google/gemini-2.0-flash-exp:free",
+        "meta-llama/llama-3.2-11b-vision-instruct:free",
+        "qwen/qwen-2-vl-72b-instruct:free",
+    ]
+    for fb in fallback_pool:
+        if fb not in candidate_models:
+            candidate_models.append(fb)
 
-    try:
-        import socket
-        socket.setdefaulttimeout(timeout)
-        req = urllib.request.Request(
-            f"{base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost:3000",
-                "X-Title": "Expense Claim Assistant",
-            },
-            method="POST",
-        )
+    import socket
+    socket.setdefaulttimeout(timeout)
 
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp_body = resp.read().decode("utf-8")
-            data = json.loads(resp_body)
+    for current_model in candidate_models:
+        payload = {
+            "model": current_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a precise document field extractor for telecom invoices. "
+                        "Answer ONLY the specific question asked. Return valid JSON."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_data_uri}},
+                    ],
+                },
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.1,
+        }
 
-            if "choices" in data and len(data["choices"]) > 0:
-                content = data["choices"][0]["message"]["content"]
-                json_match = re.search(r"\{.*\}", content, re.DOTALL)
-                if json_match:
-                    parsed = json.loads(json_match.group(0))
-                    logger.info("Vision arbitration succeeded for field '%s': %s", field_name, parsed.get("value"))
-                    return parsed
-            elif "error" in data:
-                logger.error("OpenRouter API returned error response: %s", data["error"])
-                return None
+        try:
+            req = urllib.request.Request(
+                endpoint_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://expense-claim-assistant.onrender.com",
+                    "X-Title": "Expense Claim Assistant",
+                },
+                method="POST",
+            )
 
-    except urllib.error.HTTPError as http_err:
-        logger.warning(
-            "OpenRouter HTTP %d error for field '%s' (fallback to heuristics): %s",
-            http_err.code, field_name, http_err.reason
-        )
-        return None
-    except urllib.error.URLError as url_err:
-        logger.warning(
-            "OpenRouter connection error for field '%s' (fallback to heuristics): %s",
-            field_name, url_err.reason
-        )
-        return None
-    except json.JSONDecodeError as json_err:
-        logger.warning(
-            "Failed to decode OpenRouter JSON response for field '%s': %s",
-            field_name, json_err
-        )
-        return None
-    except Exception as err:
-        logger.warning(
-            "Vision arbitration unexpected exception for field '%s' (fallback to heuristics): %s",
-            field_name, err
-        )
-        return None
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resp_body = resp.read().decode("utf-8")
+                data = json.loads(resp_body)
+
+                if "choices" in data and len(data["choices"]) > 0:
+                    content = data["choices"][0]["message"]["content"]
+                    json_match = re.search(r"\{.*\}", content, re.DOTALL)
+                    if json_match:
+                        parsed = json.loads(json_match.group(0))
+                        logger.info("Vision arbitration succeeded (%s) for field '%s': %s", current_model, field_name, parsed.get("value"))
+                        return parsed
+                elif "error" in data:
+                    logger.error("OpenRouter API error response (%s): %s", current_model, data["error"])
+
+        except urllib.error.HTTPError as http_err:
+            err_body = ""
+            try:
+                err_body = http_err.read().decode("utf-8")
+            except Exception:
+                pass
+            logger.warning(
+                "OpenRouter HTTP %d error for model '%s' on %s (field '%s'): %s | Response: %s",
+                http_err.code, current_model, endpoint_url, field_name, http_err.reason, err_body
+            )
+            # If 404 or 429, loop to next fallback model
+            continue
+        except urllib.error.URLError as url_err:
+            logger.warning("OpenRouter connection error on %s: %s", endpoint_url, url_err.reason)
+            break
+        except Exception as err:
+            logger.warning("Vision arbitration unexpected exception: %s", err)
+            break
 
     return None
 
